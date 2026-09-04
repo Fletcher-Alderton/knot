@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, setView, render, setInvokeForTests, setDirectoryPickerForTests } from './main';
+import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, reorderColumns, setView, render, setInvokeForTests, setDirectoryPickerForTests } from './main';
 
 describe('Kanban UI',()=>{
  it('escapes card content before rendering',()=>expect(renderCardText('<script>')).toBe('&lt;script&gt;'));
@@ -37,9 +37,27 @@ describe('Kanban UI',()=>{
    expect(state.boardPath).toBe('/chosen-board');expect(state.boardId).toBe('01BOARDULID');expect(state.boardTitle).toBe('Chosen board');expect(state.error).toBe('');
    setDirectoryPickerForTests(null);setInvokeForTests(null);
  });
- it('shows only one smart board action',()=>{
+ it('shows one icon-only smart board action',()=>{
    state.boardPath='/board';state.view='board';render();
-   expect(document.querySelector('#open')).not.toBeNull();expect(document.querySelector('#create')).toBeNull();
+   expect(document.querySelector('#open')?.textContent?.trim()).toBe('＋');expect(document.querySelector('#create')).toBeNull();
+ });
+ it('removes redundant board and card chrome while keeping accessible compact actions',()=>{
+   state.boardPath='/board';state.boardTitle='Board';state.view='board';state.columns=[{id:'todo',name:'Todo'}];state.cards=Array.from({length:7},(_,i)=>({id:`card-${i}`,title:`Card ${i}`,body:'',column:'todo',labels:[],updatedAt:0}));state.selected=null;render();
+   const page=document.querySelector('[data-page=board]')!;
+   expect(page.textContent).not.toContain('changes saved to Markdown');expect(page.textContent).not.toContain('Drop cards here');
+   expect(document.querySelector('.drag')).toBeNull();expect(document.querySelector('[data-delete]')).toBeNull();expect(document.querySelector('.drop-add')).toBeNull();
+   const createActions=document.querySelector('.create-actions');expect(createActions?.getAttribute('role')).toBe('group');
+   expect(Array.from(createActions!.children).map(x=>x.id)).toEqual(['new-card','add-column']);expect(document.querySelector('#new-card')?.parentElement).toBe(document.querySelector('#add-column')?.parentElement);
+   expect(document.querySelector('#new-card')?.textContent).toContain('Add card');expect(document.querySelector('#new-card')?.classList.contains('card-action')).toBe(true);
+   expect(document.querySelector('#add-column')?.textContent).toContain('Add column');expect(document.querySelector('#add-column')?.classList.contains('column-action')).toBe(true);
+   expect(document.querySelector('[data-add]')?.getAttribute('aria-label')).toContain('Add card');
+ });
+ it('persists card drops at the requested position',async()=>{
+   state.boardPath='/board';state.cards=[{id:'a',title:'A',body:'',column:'todo',labels:[],updatedAt:0},{id:'b',title:'B',body:'',column:'todo',labels:[],updatedAt:0}];const invoke=vi.fn(async()=>({id:'a',title:'A',body:'',column:'todo',position:1500,labels:[]}));setInvokeForTests(invoke as any);
+   await moveCard('a','todo',1500);expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'a',column:'todo',position:1500});setInvokeForTests(null);
+ });
+ it('moves a card between columns at the dropped insertion point',async()=>{
+   state.boardPath='/board';state.columns=[{id:'todo',name:'Todo'},{id:'done',name:'Done'}];state.cards=[{id:'a',title:'A',body:'',column:'todo',labels:[],updatedAt:0},{id:'b',title:'B',body:'',column:'done',labels:[],updatedAt:0,position:1000},{id:'c',title:'C',body:'',column:'done',labels:[],updatedAt:0,position:2000}];const invoke=vi.fn(async()=>({id:'a',title:'A',body:'',column:'done',position:1500,labels:[]}));setInvokeForTests(invoke as any);render();const target=document.querySelector<HTMLElement>('[data-id=c]')!;Object.defineProperty(target,'getBoundingClientRect',{value:()=>({top:100,height:40,bottom:140,left:0,right:100,width:100}),configurable:true});const source=document.querySelector<HTMLElement>('[data-id=a]')!;Object.defineProperty(document,'elementFromPoint',{value:vi.fn(()=>target),configurable:true});source.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true,clientX:10,clientY:10,button:0}));document.dispatchEvent(new MouseEvent('pointermove',{bubbles:true,clientX:10,clientY:110,buttons:1}));document.dispatchEvent(new MouseEvent('pointerup',{bubbles:true,clientX:10,clientY:110,button:0}));await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'a',column:'done',position:1500}));setInvokeForTests(null);
  });
  it('moves a card across dynamic columns and persists the drop',async()=>{
    state.boardPath='/board';state.columns=[{id:'todo',name:'Todo'},{id:'review',name:'Review'}];state.cards=[{id:'card-1',title:'Card',body:'',column:'todo',labels:[],updatedAt:0}];
@@ -67,11 +85,21 @@ describe('Kanban UI',()=>{
    expect(invoke).toHaveBeenCalledWith('create_column',{path:'/board',name:'QA'});
    expect(state.columns.some(column=>column.id==='qa')).toBe(true);setInvokeForTests(null);
  });
- it('renders board tabs with right-aligned sync status and keeps sync controls on settings',()=>{
-   state.boardPath='/board';state.boardTitle='Roadmap';state.columns=[{id:'backlog',name:'Backlog'}];state.openBoards=[{path:'/board',boardId:'board-id',title:'Roadmap'}];state.cards=[];state.connected=true;state.error='';
+ it('persists reordered columns',async()=>{
+   state.boardPath='/board';state.columns=[{id:'backlog',name:'Backlog'},{id:'doing',name:'Doing'},{id:'done',name:'Done'}];
+   const invoke=vi.fn(async()=>({path:'/board',board_id:'board-id',title:'Board',columns:[{id:'done',name:'Done'},{id:'backlog',name:'Backlog'},{id:'doing',name:'Doing'}],cards:[]}));setInvokeForTests(invoke as any);
+   await reorderColumns(['done','backlog','doing']);
+   expect(invoke).toHaveBeenCalledWith('reorder_columns',{path:'/board',columnIds:['done','backlog','doing']});expect(state.columns.map(c=>c.id)).toEqual(['done','backlog','doing']);setInvokeForTests(null);
+ });
+ it('reveals board switching from the title instead of rendering tabs',()=>{
+   state.boardPath='/board';state.boardTitle='Roadmap';state.columns=[{id:'backlog',name:'Backlog'}];state.openBoards=[{path:'/board',boardId:'board-id',title:'Roadmap'},{path:'/notes',boardId:'notes-id',title:'Notes'}];state.cards=[];state.connected=true;state.error='';
    setView('board');render();
-   expect(document.querySelector('[role=tablist]')?.textContent).toContain('Roadmap');
-   expect(document.querySelector('.top-sync-status')?.textContent).toContain('Synced');
+   expect(document.querySelector('[role=tablist]')).toBeNull();
+   const titleCard=document.querySelector('.board-title-menu')!;expect(titleCard.querySelector('#rename-board')?.textContent).toBe('Roadmap');
+   expect(titleCard.querySelector('[role=menu]')?.textContent).toContain('Notes');expect((titleCard.textContent?.match(/Roadmap/g)||[]).length).toBe(1);
+   expect(document.querySelector('header')).toBeNull();
+   expect(document.querySelector('.board-sync-status')?.textContent).toContain('Synced');
+   expect(document.querySelector('.board-switcher #open')).not.toBeNull();
    expect(document.querySelector('.sidebar-sync')).toBeNull();
    setView('settings');render();
    expect(document.querySelector('[data-page=settings]')?.textContent).toContain('Sync settings');
@@ -85,14 +113,14 @@ describe('Kanban UI',()=>{
    document.querySelector<HTMLElement>('.settings-toggle')!.click();
    expect(state.view).toBe('board');
  });
- it('renames and creates through accessible in-app dialogs',async()=>{
+ it('renames board and columns inline while creating columns in-app',async()=>{
    state.boardPath='/board';state.boardId='board-id';state.boardTitle='Old';state.view='board';state.columns=[{id:'backlog',name:'Backlog'}];state.cards=[];
    const info={path:'/board',board_id:'board-id',title:'Roadmap',columns:[{id:'backlog',name:'Backlog'}],cards:[]};
    const invoke=vi.fn(async()=>info);setInvokeForTests(invoke as any);render();
    document.querySelector<HTMLElement>('#rename-board')!.click();
-   expect(document.querySelector('[role=dialog]')?.textContent).toContain('Rename board');
-   const input=document.querySelector<HTMLInputElement>('#dialog-input')!;input.value='Roadmap';
-   document.querySelector<HTMLFormElement>('#input-dialog-form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+   expect(document.querySelector('[role=dialog]')).toBeNull();
+   const input=document.querySelector<HTMLInputElement>('#inline-title-input')!;input.value='Roadmap';
+   input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('rename_board',{path:'/board',title:'Roadmap'}));
    document.querySelector<HTMLElement>('#add-column')!.click();
    expect(document.querySelector('[role=dialog]')?.textContent).toContain('Add column');
@@ -100,9 +128,10 @@ describe('Kanban UI',()=>{
    document.querySelector<HTMLFormElement>('#input-dialog-form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('create_column',{path:'/board',name:'QA'}));
    document.querySelector<HTMLElement>('[data-rename-column=backlog]')!.click();
-   expect((document.querySelector<HTMLInputElement>('#dialog-input')!).value).toBe('Backlog');
-   document.querySelector<HTMLInputElement>('#dialog-input')!.value='Ideas';
-   document.querySelector<HTMLFormElement>('#input-dialog-form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+   expect(document.querySelector('[role=dialog]')).toBeNull();
+   expect((document.querySelector<HTMLInputElement>('#inline-column-input')!).value).toBe('Backlog');
+   document.querySelector<HTMLInputElement>('#inline-column-input')!.value='Ideas';
+   document.querySelector<HTMLInputElement>('#inline-column-input')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('rename_column',{path:'/board',columnId:'backlog',name:'Ideas'}));
    setInvokeForTests(null);
  });
@@ -130,6 +159,15 @@ describe('Kanban UI',()=>{
    document.querySelector<HTMLFormElement>('#input-dialog-form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('pair_peer_address',{peerId:'peer-dialog',address,authorizedBoards:['board-id']}));
    setInvokeForTests(null);
+ });
+ it('reorders columns by dragging their headers',async()=>{
+   state.boardPath='/board';state.boardId='board-id';state.boardTitle='Board';state.view='board';state.columns=[{id:'todo',name:'Todo'},{id:'done',name:'Done'}];state.cards=[];
+   const info={path:'/board',board_id:'board-id',title:'Board',columns:[{id:'done',name:'Done'},{id:'todo',name:'Todo'}],cards:[]};const invoke=vi.fn(async()=>info);setInvokeForTests(invoke as any);render();
+   const source=document.querySelector<HTMLElement>('[data-column=todo]')!,handle=source.querySelector<HTMLElement>('.column-head')!,target=document.querySelector<HTMLElement>('[data-column=done]')!;
+   Object.defineProperty(target,'getBoundingClientRect',{value:()=>({left:200,width:100,top:0,right:300,bottom:300,height:300,x:200,y:0,toJSON(){}}),configurable:true});Object.defineProperty(document,'elementFromPoint',{value:vi.fn(()=>target),configurable:true});
+   handle.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true,clientX:10,clientY:10,button:0}));document.dispatchEvent(new MouseEvent('pointermove',{bubbles:true,clientX:275,clientY:20,buttons:1}));
+   const columnGhost=document.querySelector<HTMLElement>('.column-drag-ghost');expect(columnGhost).not.toBeNull();expect(columnGhost!.style.transformOrigin).toBe('10px 10px');document.dispatchEvent(new MouseEvent('pointerup',{bubbles:true,clientX:275,clientY:20,button:0}));
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('reorder_columns',{path:'/board',columnIds:['done','todo']}));setInvokeForTests(null);
  });
  it('moves cards with pointer dragging when native HTML drag events are unavailable',async()=>{
    state.boardPath='/board';state.view='board';state.columns=[{id:'todo',name:'Todo'},{id:'done',name:'Done'}];state.cards=[{id:'pointer-card',title:'Pointer card',body:'',column:'todo',labels:[],updatedAt:0}];state.selected=null;

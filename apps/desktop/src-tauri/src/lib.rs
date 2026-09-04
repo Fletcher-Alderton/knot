@@ -788,6 +788,36 @@ title: My board
         })
     }
     #[tauri::command]
+    pub fn reorder_columns(path: String, column_ids: Vec<String>) -> Result<BoardInfo, String> {
+        save_board_metadata(&path, |b| {
+            let cols: Vec<BoardColumn> = b
+                .metadata
+                .get("columns")
+                .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+                .filter(|columns: &Vec<BoardColumn>| !columns.is_empty())
+                .unwrap_or_else(default_columns);
+            if column_ids.len() != cols.len() {
+                return Err("column order must include every column exactly once".into());
+            }
+            let mut by_id: HashMap<String, BoardColumn> = cols
+                .into_iter()
+                .map(|column| (column.id.clone(), column))
+                .collect();
+            let mut reordered = Vec::with_capacity(column_ids.len());
+            for id in &column_ids {
+                reordered.push(by_id.remove(id).ok_or_else(|| "column order contains an unknown or duplicate column".to_string())?);
+            }
+            if !by_id.is_empty() {
+                return Err("column order must include every column exactly once".into());
+            }
+            b.metadata.insert(
+                "columns".into(),
+                serde_yaml::to_value(reordered).map_err(|e| e.to_string())?,
+            );
+            Ok(())
+        })
+    }
+    #[tauri::command]
     pub fn create_column(path: String, name: String) -> Result<BoardInfo, String> {
         if name.trim().is_empty() {
             return Err("column name must be nonempty".into());
@@ -1147,6 +1177,7 @@ pub fn run() {
             commands::open_or_create_board,
             commands::rename_board,
             commands::rename_column,
+            commands::reorder_columns,
             commands::create_column,
             commands::list_cards,
             commands::read_card,
@@ -1270,6 +1301,18 @@ body";
         rename_board(path.clone(), "Existing".into()).unwrap();
         let reopened = open_or_create_board(path).unwrap();
         assert_eq!(reopened.title, "Existing");
+        let _ = fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn reorders_columns_without_losing_metadata() {
+        let p = std::env::temp_dir().join(format!("irohmd-column-order-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        let path = p.to_string_lossy().into_owned();
+        create_board(path.clone()).unwrap();
+        let reordered = reorder_columns(path.clone(), vec!["done".into(), "backlog".into(), "doing".into()]).unwrap();
+        assert_eq!(reordered.columns.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["done", "backlog", "doing"]);
+        assert!(reorder_columns(path, vec!["done".into(), "done".into(), "doing".into()]).is_err());
         let _ = fs::remove_dir_all(p);
     }
 
