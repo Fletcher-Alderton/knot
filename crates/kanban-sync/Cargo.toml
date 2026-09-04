@@ -1,0 +1,18 @@
+[package]
+name = "kanban-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kanban-core = { path = "../kanban-core" }
+kanban-revisions = { path = "../kanban-revisions" }
+kanban-merge = { path = "../kanban-merge" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+ulid.workspace = true
+async-trait.workspace = true
+sha2.workspace = true
+hex.workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "desktop"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+kanban-core = { path = "../../../crates/kanban-core" }
+kanban-store = { path = "../../../crates/kanban-store" }
+kanban-revisions = { path = "../../../crates/kanban-revisions" }
+kanban-merge = { path = "../../../crates/kanban-merge" }
+kanban-sync = { path = "../../../crates/kanban-sync" }
+notify = "6"
+ulid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+kanban-iroh = { path = "../../../crates/kanban-iroh" }
+iroh = "1.1"
+tokio = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "kanban-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kanban-core = { path = "../kanban-core" }
+thiserror.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+hex.workspace = true
