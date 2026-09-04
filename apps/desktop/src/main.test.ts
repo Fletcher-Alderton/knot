@@ -176,7 +176,7 @@ describe('Kanban UI',()=>{
    const hit=vi.fn(()=>target);Object.defineProperty(document,'elementFromPoint',{value:hit,configurable:true});
    card.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true,clientX:10,clientY:10,button:0}));
    document.dispatchEvent(new MouseEvent('pointermove',{bubbles:true,clientX:30,clientY:30,buttons:1}));
-   expect(target.classList.contains('drag-over')).toBe(true);expect(card.classList.contains('dragging')).toBe(true);
+   expect(target.classList.contains('drag-over')).toBe(true);expect(card.classList.contains('dragging')).toBe(true);expect(document.querySelector('.card-drop-placeholder')).not.toBeNull();
    const ghost=document.querySelector<HTMLElement>('.drag-ghost');expect(ghost).not.toBeNull();expect(ghost!.style.transformOrigin).toBe('10px 10px');
    document.dispatchEvent(new MouseEvent('pointerup',{bubbles:true,clientX:30,clientY:30,button:0}));
    expect(document.querySelector('.drag-ghost')).toBeNull();

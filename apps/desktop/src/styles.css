@@ -163,6 +163,9 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 .add:hover, .add:focus-visible { background: var(--surface); border-color: var(--border); }
 .dropzone { min-height: 160px; padding: 1px; border: 1px dashed transparent; border-radius: var(--radius-m); transition: background 160ms ease, border-color 160ms ease; }
 .dropzone.drag-over { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.card-drop-placeholder { height: 68px; margin: 0 0 8px; border: 2px dashed color-mix(in srgb, var(--accent) 72%, var(--border)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--accent) 13%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); animation: card-drop-pulse 900ms ease-in-out infinite; }
+.card-drop-placeholder::after { content: 'Drop card here'; display: grid; place-items: center; height: 100%; color: color-mix(in srgb, var(--accent) 70%, var(--text)); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+@keyframes card-drop-pulse { 0%,100% { opacity: .65; transform: scale(.99); } 50% { opacity: 1; transform: scale(1); } }
 
 .card { margin-bottom: 8px; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-raised); box-shadow: var(--shadow-tactile); cursor: grab; user-select: none; touch-action: none; transition: transform 160ms var(--motion), box-shadow 160ms ease, border-color 160ms ease; }
 .card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.24); }
