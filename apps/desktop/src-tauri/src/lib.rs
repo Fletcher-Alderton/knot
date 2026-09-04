@@ -19,10 +19,19 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardColumn {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_yaml::Value>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardInfo {
     pub path: String,
     pub board_id: String,
+    pub title: String,
+    pub columns: Vec<BoardColumn>,
     pub cards: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +57,7 @@ pub struct WatchEvent {
 pub struct PeerInfo {
     pub peer_id: String,
     pub trusted: bool,
+    pub address: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncStatus {
@@ -219,14 +229,108 @@ fn board_identity(path: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     Ok(id)
 }
+fn default_columns() -> Vec<BoardColumn> {
+    vec![
+        BoardColumn {
+            id: "backlog".into(),
+            name: "Backlog".into(),
+            extra: HashMap::new(),
+        },
+        BoardColumn {
+            id: "doing".into(),
+            name: "Doing".into(),
+            extra: HashMap::new(),
+        },
+        BoardColumn {
+            id: "done".into(),
+            name: "Done".into(),
+            extra: HashMap::new(),
+        },
+    ]
+}
+fn board_metadata(path: &Path) -> Result<(kanban_core::Board, String, Vec<BoardColumn>), String> {
+    let file = path.join("board.md");
+    let text = fs::read_to_string(&file).map_err(|e| e.to_string())?;
+    let mut b = kanban_core::Board::parse(&text).map_err(|e| e.to_string())?;
+    let mut changed = false;
+    let id = match b.metadata.get("id").and_then(|v| v.as_str()) {
+        Some(id) if kanban_core::validate_ulid(id) => id.to_string(),
+        Some(_) => return Err("board id must be a valid ULID".into()),
+        None => {
+            let id = ulid::Ulid::new().to_string();
+            b.metadata
+                .insert("id".into(), serde_yaml::Value::String(id.clone()));
+            changed = true;
+            id
+        }
+    };
+    let parsed_columns = b
+        .metadata
+        .get("columns")
+        .and_then(|v| serde_yaml::from_value::<Vec<BoardColumn>>(v.clone()).ok())
+        .filter(|columns| !columns.is_empty());
+    let columns = parsed_columns.clone().unwrap_or_else(default_columns);
+    if parsed_columns.is_none() {
+        b.metadata.insert(
+            "columns".into(),
+            serde_yaml::to_value(&columns).map_err(|e| e.to_string())?,
+        );
+        changed = true;
+    }
+    if !b
+        .metadata
+        .get("title")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        b.metadata
+            .insert("title".into(), serde_yaml::Value::String("My board".into()));
+        changed = true;
+    }
+    if changed {
+        fs::write(&file, b.to_markdown().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok((b, id, columns))
+}
 fn inspect(path: String) -> Result<BoardInfo, String> {
-    let board_id = board_identity(Path::new(&path))?;
+    let (b, board_id, columns) = board_metadata(Path::new(&path))?;
     let s = board(&path)?;
     Ok(BoardInfo {
         path,
         board_id,
+        title: b
+            .metadata
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("My board")
+            .into(),
+        columns,
         cards: s.list_cards().map_err(|e| e.to_string())?,
     })
+}
+fn save_board_metadata(
+    path: &str,
+    mut f: impl FnMut(&mut kanban_core::Board) -> Result<(), String>,
+) -> Result<BoardInfo, String> {
+    board_metadata(Path::new(path))?;
+    let file = Path::new(path).join("board.md");
+    let text = fs::read_to_string(&file).map_err(|e| e.to_string())?;
+    let mut b = kanban_core::Board::parse(&text).map_err(|e| e.to_string())?;
+    f(&mut b)?;
+    fs::write(file, b.to_markdown().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    inspect(path.to_string())
+}
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() { "column".into() } else { out }
 }
 fn card_info(id: String, markdown: &str) -> Result<CardInfo, String> {
     let c = Card::parse(markdown).map_err(|e| e.to_string())?;
@@ -635,6 +739,86 @@ title: My board
         inspect(path)
     }
     #[tauri::command]
+    pub fn open_or_create_board(path: String) -> Result<BoardInfo, String> {
+        if Path::new(&path).join("board.md").exists() {
+            open_board(path)
+        } else {
+            create_board(path)
+        }
+    }
+    #[tauri::command]
+    pub fn rename_board(path: String, title: String) -> Result<BoardInfo, String> {
+        if title.trim().is_empty() {
+            return Err("board title must be nonempty".into());
+        }
+        save_board_metadata(&path, |b| {
+            b.metadata.insert(
+                "title".into(),
+                serde_yaml::Value::String(title.trim().into()),
+            );
+            Ok(())
+        })
+    }
+    #[tauri::command]
+    pub fn rename_column(
+        path: String,
+        column_id: String,
+        name: String,
+    ) -> Result<BoardInfo, String> {
+        if name.trim().is_empty() {
+            return Err("column name must be nonempty".into());
+        }
+        save_board_metadata(&path, |b| {
+            let mut cols: Vec<BoardColumn> = b
+                .metadata
+                .get("columns")
+                .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+                .filter(|columns: &Vec<BoardColumn>| !columns.is_empty())
+                .unwrap_or_else(default_columns);
+            let c = cols
+                .iter_mut()
+                .find(|c| c.id == column_id)
+                .ok_or_else(|| "column not found".to_string())?;
+            c.name = name.trim().into();
+            b.metadata.insert(
+                "columns".into(),
+                serde_yaml::to_value(cols).map_err(|e| e.to_string())?,
+            );
+            Ok(())
+        })
+    }
+    #[tauri::command]
+    pub fn create_column(path: String, name: String) -> Result<BoardInfo, String> {
+        if name.trim().is_empty() {
+            return Err("column name must be nonempty".into());
+        }
+        save_board_metadata(&path, |b| {
+            let mut cols: Vec<BoardColumn> = b
+                .metadata
+                .get("columns")
+                .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+                .filter(|columns: &Vec<BoardColumn>| !columns.is_empty())
+                .unwrap_or_else(default_columns);
+            let base = slug(name.trim());
+            let mut id = base.clone();
+            let mut n = 2;
+            while cols.iter().any(|c| c.id == id) {
+                id = format!("{base}-{n}");
+                n += 1;
+            }
+            cols.push(BoardColumn {
+                id,
+                name: name.trim().into(),
+                extra: HashMap::new(),
+            });
+            b.metadata.insert(
+                "columns".into(),
+                serde_yaml::to_value(cols).map_err(|e| e.to_string())?,
+            );
+            Ok(())
+        })
+    }
+    #[tauri::command]
     pub fn list_cards(path: String) -> Result<Vec<CardInfo>, String> {
         let s = board(&path)?;
         s.list_cards()
@@ -825,11 +1009,13 @@ title: My board
         runtime()
             .lock()
             .unwrap()
+            .config
             .peers
             .iter()
-            .map(|p| PeerInfo {
-                peer_id: p.clone(),
+            .map(|(peer_id, peer)| PeerInfo {
+                peer_id: peer_id.clone(),
                 trusted: true,
+                address: peer.address.clone(),
             })
             .collect()
     }
@@ -872,6 +1058,7 @@ title: My board
         Ok(PeerInfo {
             peer_id,
             trusted: true,
+            address: Some(serde_json::to_string(&addr).unwrap_or(address)),
         })
     }
     #[tauri::command]
@@ -957,6 +1144,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::open_board,
             commands::create_board,
+            commands::open_or_create_board,
+            commands::rename_board,
+            commands::rename_column,
+            commands::create_column,
             commands::list_cards,
             commands::read_card,
             commands::add_card,
@@ -980,6 +1171,108 @@ pub fn run() {
 mod tests {
     use super::commands::*;
     use super::*;
+    #[test]
+    fn board_metadata_commands_persist() {
+        let p = std::env::temp_dir().join(format!("luna-board-meta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        let path = p.to_string_lossy().into_owned();
+        let created = create_board(path.clone()).unwrap();
+        assert_eq!(created.title, "My board");
+        assert_eq!(
+            created
+                .columns
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["backlog", "doing", "done"]
+        );
+        let renamed = rename_board(path.clone(), "Roadmap".into()).unwrap();
+        assert_eq!(renamed.title, "Roadmap");
+        let renamed_col =
+            rename_column(path.clone(), "doing".into(), "In progress".into()).unwrap();
+        assert_eq!(renamed_col.columns[1].name, "In progress");
+        let added = create_column(path.clone(), "Review queue".into()).unwrap();
+        assert_eq!(added.columns.len(), 4);
+        let reopened = open_board(path.clone()).unwrap();
+        assert_eq!(reopened.title, "Roadmap");
+        assert_eq!(reopened.columns, added.columns);
+        let _ = fs::remove_dir_all(p);
+    }
+    #[test]
+    fn metadata_migration_preserves_column_extensions_and_failed_writes() {
+        let p = std::env::temp_dir().join(format!("luna-board-edge-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(p.join("cards")).unwrap();
+        let path = p.to_string_lossy().into_owned();
+        fs::write(
+            p.join("board.md"),
+            "---
+id: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+title: Edge
+columns:
+  - id: todo
+    name: Todo
+    color: blue
+---
+
+body",
+        )
+        .unwrap();
+        rename_column(path.clone(), "todo".into(), "To do".into()).unwrap();
+        assert!(
+            fs::read_to_string(p.join("board.md"))
+                .unwrap()
+                .contains("color: blue")
+        );
+
+        fs::write(
+            p.join("board.md"),
+            "---
+id: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+title: Edge
+columns: []
+---
+
+body",
+        )
+        .unwrap();
+        let migrated = open_board(path.clone()).unwrap();
+        assert_eq!(migrated.columns.len(), 3);
+        assert_eq!(
+            create_column(path.clone(), "QA".into())
+                .unwrap()
+                .columns
+                .len(),
+            4
+        );
+
+        let invalid = "---
+id: invalid
+title: Before
+---
+
+body";
+        fs::write(p.join("board.md"), invalid).unwrap();
+        assert!(rename_board(path, "After".into()).is_err());
+        assert_eq!(fs::read_to_string(p.join("board.md")).unwrap(), invalid);
+        let _ = fs::remove_dir_all(p);
+    }
+    #[test]
+    fn open_or_create_initializes_empty_directories_and_preserves_existing_boards() {
+        let p = std::env::temp_dir().join(format!("irohmd-smart-open-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        let path = p.to_string_lossy().into_owned();
+        let created = open_or_create_board(path.clone()).unwrap();
+        assert_eq!(created.title, "My board");
+        assert!(p.join("board.md").is_file());
+        assert!(p.join("cards").is_dir());
+        rename_board(path.clone(), "Existing".into()).unwrap();
+        let reopened = open_or_create_board(path).unwrap();
+        assert_eq!(reopened.title, "Existing");
+        let _ = fs::remove_dir_all(p);
+    }
+
     #[test]
     fn creates_and_cruds() {
         let p = std::env::temp_dir().join(format!("luna-desktop-{}", std::process::id()));
@@ -1119,6 +1412,16 @@ mod tests {
         fs::write(p.join("board.md"), "---\ntitle: Valid\n---\n\nbody").unwrap();
         let first = board_identity(&p).unwrap();
         assert_eq!(first, board_identity(&p).unwrap());
+        fs::write(
+            p.join("board.md"),
+            "---\ntitle: With columns\ncolumns:\n  - id: todo\n    name: Todo\n---\n\nbody",
+        )
+        .unwrap();
+        let migrated = inspect(p.to_string_lossy().into_owned()).unwrap().board_id;
+        assert_eq!(
+            migrated,
+            inspect(p.to_string_lossy().into_owned()).unwrap().board_id
+        );
         let bad = "---\ntitle: [\n---\nuntouched";
         fs::write(p.join("board.md"), bad).unwrap();
         assert!(board_identity(&p).is_err());
