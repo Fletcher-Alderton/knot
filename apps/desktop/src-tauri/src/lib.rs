@@ -730,6 +730,7 @@ fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, Str
 }
 mod commands {
     use super::*;
+    use tauri::Emitter;
     #[tauri::command]
     pub fn model_settings() -> model_manager::ModelSettings {
         model_manager::load_settings()
@@ -829,10 +830,13 @@ mod commands {
 
     #[tauri::command]
     pub async fn download_huggingface_gguf(
+        app: tauri::AppHandle,
         repo_id: String,
         filename: String,
     ) -> Result<model_manager::LocalModel, String> {
-        model_manager::download_huggingface_gguf(&repo_id, &filename).await
+        model_manager::download_huggingface_gguf(&repo_id, &filename, |progress| {
+            let _ = app.emit("model-download-progress", progress);
+        }).await
     }
     #[tauri::command]
     pub fn inspect_local_model(path: String) -> Result<gguf_runtime::GgufModelInfo, String> {

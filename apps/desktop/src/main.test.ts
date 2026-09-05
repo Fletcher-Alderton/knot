@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, reorderColumns, setView, render, setInvokeForTests, setDirectoryPickerForTests } from './main';
+import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests } from './main';
 
 describe('Kanban UI',()=>{
  it('escapes card content before rendering',()=>expect(renderCardText('<script>')).toBe('&lt;script&gt;'));
@@ -102,7 +102,7 @@ describe('Kanban UI',()=>{
    expect(document.querySelector('.board-switcher #open')).not.toBeNull();
    expect(document.querySelector('.sidebar-sync')).toBeNull();
    setView('settings');render();
-   expect(document.querySelector('[data-page=settings]')?.textContent).toContain('Sync settings');
+   expect(document.querySelector('[data-page=settings]')?.textContent).toContain('Settings');
    expect(document.querySelector('#pair')).not.toBeNull();expect(document.querySelector('#sync')).not.toBeNull();
  });
  it('uses the settings control to return to the board',()=>{
@@ -182,5 +182,58 @@ describe('Kanban UI',()=>{
    expect(document.querySelector('.drag-ghost')).toBeNull();
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'pointer-card',column:'done',position:1000}));
    setInvokeForTests(null);
+ });
+
+ it('presents settings as a simple models-first workspace',()=>{
+   state.view='settings';state.error='';state.localModels=[];state.hfSearchResults=[];state.modelSettings={};state.modelLoading=false;render();
+   const page=document.querySelector('[data-page=settings]')!;
+   expect(page.querySelector('h1')?.textContent).toBe('Settings');
+   expect(page.querySelector('[data-settings-section=models]')).not.toBeNull();
+   expect(page.querySelector('[data-settings-section=sync]')).not.toBeNull();
+   expect(page.querySelector('.model-setup-status')?.textContent).toContain('Choose a model');
+   expect(page.querySelectorAll('[data-install-recommended]').length).toBeGreaterThan(0);
+   expect(page.textContent).not.toContain('HF GGUF filename');
+ });
+
+ it('installs and activates a recommended model in one click',async()=>{
+   state.view='settings';state.error='';state.localModels=[];state.modelSettings={};state.modelLoading=false;
+   const installed={id:'qwen.gguf',provider:'huggingface',name:'Qwen',source:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',size_bytes:1_100_000_000};
+   const invoke=vi.fn(async(command:string)=>{if(command==='download_huggingface_gguf')return installed;if(command==='save_model_settings')return null;if(command==='model_settings')return {provider:'huggingface',model_id:'qwen.gguf'};if(command==='list_local_models')return [installed];throw new Error(command)});
+   setInvokeForTests(invoke as any);render();document.querySelector<HTMLElement>('[data-install-recommended]')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('download_huggingface_gguf',expect.objectContaining({repoId:'Qwen/Qwen2.5-1.5B-Instruct-GGUF'})));
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:{provider:'huggingface',model_id:'qwen.gguf'}}));
+   expect(state.modelSettings.model_id).toBe('qwen.gguf');setInvokeForTests(null);
+ });
+
+ it('activates an installed model with one click',async()=>{
+   state.view='settings';state.error='';state.localModels=[{id:'local.gguf',provider:'huggingface',name:'Local model',source:'repo',size_bytes:2048}];state.modelSettings={};render();
+   const invoke=vi.fn(async(command:string)=>{if(command==='save_model_settings')return null;if(command==='model_settings')return {provider:'huggingface',model_id:'local.gguf'};if(command==='list_local_models')return state.localModels;throw new Error(command)});
+   setInvokeForTests(invoke as any);render();document.querySelector<HTMLElement>('[data-select-model="local.gguf"]')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:{provider:'huggingface',model_id:'local.gguf'}}));
+   setInvokeForTests(null);
+ });
+
+ it('keeps the Ollama empty state accessible and refreshes the edited URL',async()=>{
+   state.view='settings';state.error='';state.modelSettings={provider:'ollama',ollama_url:'http://127.0.0.1:11434'};state.ollamaModels=[];
+   const invoke=vi.fn(async()=>[]);setInvokeForTests(invoke as any);render();
+   expect(document.querySelectorAll('#refresh-ollama')).toHaveLength(1);
+   document.querySelector<HTMLInputElement>('#ollama-url')!.value='http://localhost:11434';
+   document.querySelector<HTMLElement>('#refresh-ollama')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_ollama_models',{url:'http://localhost:11434'}));setInvokeForTests(null);
+ });
+
+ it('lets a search result fill the repository without copy and paste',()=>{
+   state.view='settings';state.modelSettings={provider:'huggingface'};state.hfSearchResults=[{id:'owner/useful-GGUF',downloads:100,likes:4}];render();
+   document.querySelector<HTMLElement>('[data-use-hf="owner/useful-GGUF"]')!.click();
+   expect(document.querySelector<HTMLInputElement>('#hf-repo')?.value).toBe('owner/useful-GGUF');
+ });
+
+ it('shows determinate model download progress and live speed',()=>{
+   state.view='settings';state.modelSettings={provider:'huggingface'};state.modelLoading=true;
+   applyDownloadProgress({filename:'model.gguf',downloaded_bytes:536870912,total_bytes:1073741824,bytes_per_second:12582912});
+   const progress=document.querySelector<HTMLProgressElement>('.download-progress progress')!;
+   expect(progress.value).toBe(50);expect(progress.max).toBe(100);
+   expect(document.querySelector('.download-progress')?.textContent).toContain('512.0 MB of 1.0 GB');
+   expect(document.querySelector('.download-progress')?.textContent).toContain('12.0 MB/s');
  });
 });

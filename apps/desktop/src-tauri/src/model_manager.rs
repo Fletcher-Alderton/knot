@@ -1,5 +1,7 @@
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::{Duration, Instant}};
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -240,10 +242,22 @@ pub async fn search_huggingface_models(
         .collect())
 }
 
-pub async fn download_huggingface_gguf(
+#[derive(Debug, Clone, Serialize)]
+pub struct DownloadProgress {
+    pub filename: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub bytes_per_second: f64,
+}
+
+pub async fn download_huggingface_gguf<F>(
     repo_id: &str,
     filename: &str,
-) -> Result<LocalModel, String> {
+    mut on_progress: F,
+) -> Result<LocalModel, String>
+where
+    F: FnMut(DownloadProgress),
+{
     if !repo_id.contains('/')
         || filename.contains('/')
         || !filename.to_ascii_lowercase().ends_with(".gguf")
@@ -252,26 +266,43 @@ pub async fn download_huggingface_gguf(
     }
     let root = models_root();
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    let (owner, repo) = hf_hub::split_id(repo_id);
-    let client = hf_hub::HFClient::new().map_err(|e| e.to_string())?;
-    let path = client
-        .model(owner, repo)
-        .download_file()
-        .filename(filename)
-        .maybe_local_dir(Some(root.clone()))
+    let path = root.join(filename);
+    let partial_path = root.join(format!("{filename}.part"));
+    let url = format!("https://huggingface.co/{repo_id}/resolve/main/{filename}");
+    let response = reqwest::Client::new()
+        .get(url)
         .send()
         .await
+        .map_err(|e| format!("Hugging Face download failed: {e}"))?
+        .error_for_status()
         .map_err(|e| e.to_string())?;
+    let total_bytes = response.content_length();
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(&partial_path).await.map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let mut last_update = started;
+    let mut downloaded_bytes = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        downloaded_bytes += chunk.len() as u64;
+        let now = Instant::now();
+        if now.duration_since(last_update) >= Duration::from_millis(100) {
+            let elapsed = now.duration_since(started).as_secs_f64().max(0.001);
+            on_progress(DownloadProgress { filename: filename.into(), downloaded_bytes, total_bytes, bytes_per_second: downloaded_bytes as f64 / elapsed });
+            last_update = now;
+        }
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    tokio::fs::rename(&partial_path, &path).await.map_err(|e| e.to_string())?;
+    let elapsed = started.elapsed().as_secs_f64().max(0.001);
+    on_progress(DownloadProgress { filename: filename.into(), downloaded_bytes, total_bytes: total_bytes.or(Some(downloaded_bytes)), bytes_per_second: downloaded_bytes as f64 / elapsed });
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
-    let name = path
-        .file_name()
-        .and_then(|x| x.to_str())
-        .unwrap_or(filename)
-        .to_owned();
     Ok(LocalModel {
-        id: name.clone(),
+        id: filename.into(),
         provider: ModelProvider::HuggingFace,
-        name,
+        name: filename.into(),
         source: repo_id.into(),
         path: Some(path.to_string_lossy().into_owned()),
         size_bytes: metadata.len(),
