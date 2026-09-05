@@ -19,6 +19,9 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+mod gguf_runtime;
+mod model_manager;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardColumn {
     pub id: String,
@@ -44,6 +47,17 @@ pub struct CardInfo {
     pub labels: Vec<String>,
     pub updated_at: Option<String>,
     pub revision: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedCardDraft {
+    pub title: String,
+    pub body: String,
+    pub column: String,
+    pub labels: Vec<String>,
+    pub due: Option<String>,
+    pub start: Option<String>,
+    pub confidence: f32,
+    pub warnings: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchEvent {
@@ -717,6 +731,122 @@ fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, Str
 mod commands {
     use super::*;
     #[tauri::command]
+    pub fn model_settings() -> model_manager::ModelSettings {
+        model_manager::load_settings()
+    }
+    #[tauri::command]
+    pub fn save_model_settings(settings: model_manager::ModelSettings) -> Result<(), String> {
+        model_manager::save_settings(&settings)
+    }
+    #[tauri::command]
+    pub fn list_local_models() -> Result<Vec<model_manager::LocalModel>, String> {
+        model_manager::list_local_models()
+    }
+    #[tauri::command]
+    pub async fn list_ollama_models(
+        url: Option<String>,
+    ) -> Result<Vec<model_manager::OllamaModel>, String> {
+        model_manager::list_ollama_models(url.as_deref().unwrap_or("http://127.0.0.1:11434")).await
+    }
+    #[tauri::command]
+    pub async fn parse_quick_add(path: String, text: String) -> Result<ParsedCardDraft, String> {
+        if text.trim().is_empty() {
+            return Err("quick-add input is empty".into());
+        }
+        let settings = model_manager::load_settings();
+        let provider = settings
+            .provider
+            .ok_or("configure a local NLP model first")?;
+        let model = settings.model_id.ok_or("choose a model first")?;
+        let info = inspect(path)?;
+        let columns = info
+            .columns
+            .iter()
+            .map(|c| format!("{}={}", c.id, c.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let prompt = format!(
+            "Return JSON only with title, body, column, labels, due, start, confidence, warnings. Extract a task from the input. Valid columns: {columns}. Dates must be ISO-8601 dates or null. Input: {text}"
+        );
+        let raw = match provider {
+            model_manager::ModelProvider::Ollama => {
+                model_manager::ollama_generate(
+                    settings
+                        .ollama_url
+                        .as_deref()
+                        .unwrap_or("http://127.0.0.1:11434"),
+                    &model,
+                    &prompt,
+                )
+                .await?
+            }
+            model_manager::ModelProvider::HuggingFace => {
+                let local = model_manager::list_local_models()?
+                    .into_iter()
+                    .find(|m| m.id == model)
+                    .ok_or("selected Hugging Face model is not installed")?;
+                let path = local.path.ok_or("selected model has no local path")?;
+                gguf_runtime::generate(&path, &model_manager::models_root(), &prompt, 256)?
+            }
+        };
+        let mut draft: ParsedCardDraft = serde_json::from_str(&raw)
+            .map_err(|e| format!("model returned invalid quick-add JSON: {e}"))?;
+        if draft.title.trim().is_empty() {
+            return Err("model returned an empty title".into());
+        }
+        let valid_column = info
+            .columns
+            .iter()
+            .find(|c| {
+                c.id.eq_ignore_ascii_case(&draft.column)
+                    || c.name.eq_ignore_ascii_case(&draft.column)
+            })
+            .map(|c| c.id.clone());
+        match valid_column {
+            Some(column) => draft.column = column,
+            None => {
+                draft
+                    .warnings
+                    .push(format!("Unknown column: {}", draft.column));
+                draft.column = info
+                    .columns
+                    .first()
+                    .map(|c| c.id.clone())
+                    .unwrap_or_else(|| "backlog".into());
+            }
+        }
+        draft.confidence = draft.confidence.clamp(0.0, 1.0);
+        Ok(draft)
+    }
+
+    #[tauri::command]
+    pub async fn search_huggingface_models(
+        query: String,
+        limit: Option<usize>,
+    ) -> Result<Vec<model_manager::HuggingFaceModel>, String> {
+        model_manager::search_huggingface_models(&query, limit.unwrap_or(20)).await
+    }
+
+    #[tauri::command]
+    pub async fn download_huggingface_gguf(
+        repo_id: String,
+        filename: String,
+    ) -> Result<model_manager::LocalModel, String> {
+        model_manager::download_huggingface_gguf(&repo_id, &filename).await
+    }
+    #[tauri::command]
+    pub fn inspect_local_model(path: String) -> Result<gguf_runtime::GgufModelInfo, String> {
+        gguf_runtime::inspect_model(&path, &model_manager::models_root())
+    }
+    #[tauri::command]
+    pub fn delete_local_model(id: String) -> Result<bool, String> {
+        model_manager::delete_local_model(&id)
+    }
+    #[tauri::command]
+    pub fn delete_all_local_models() -> Result<usize, String> {
+        model_manager::delete_all_local_models()
+    }
+    #[tauri::command]
     pub fn open_board(path: String) -> Result<BoardInfo, String> {
         inspect(path)
     }
@@ -805,7 +935,9 @@ title: My board
                 .collect();
             let mut reordered = Vec::with_capacity(column_ids.len());
             for id in &column_ids {
-                reordered.push(by_id.remove(id).ok_or_else(|| "column order contains an unknown or duplicate column".to_string())?);
+                reordered.push(by_id.remove(id).ok_or_else(|| {
+                    "column order contains an unknown or duplicate column".to_string()
+                })?);
             }
             if !by_id.is_empty() {
                 return Err("column order must include every column exactly once".into());
@@ -1193,7 +1325,17 @@ pub fn run() {
             commands::endpoint_info,
             commands::sync_board,
             commands::list_trusted_peers,
-            commands::sync_status
+            commands::sync_status,
+            commands::model_settings,
+            commands::save_model_settings,
+            commands::list_local_models,
+            commands::delete_local_model,
+            commands::delete_all_local_models,
+            commands::list_ollama_models,
+            commands::search_huggingface_models,
+            commands::download_huggingface_gguf,
+            commands::parse_quick_add,
+            commands::inspect_local_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1310,8 +1452,19 @@ body";
         let _ = fs::remove_dir_all(&p);
         let path = p.to_string_lossy().into_owned();
         create_board(path.clone()).unwrap();
-        let reordered = reorder_columns(path.clone(), vec!["done".into(), "backlog".into(), "doing".into()]).unwrap();
-        assert_eq!(reordered.columns.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["done", "backlog", "doing"]);
+        let reordered = reorder_columns(
+            path.clone(),
+            vec!["done".into(), "backlog".into(), "doing".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            reordered
+                .columns
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["done", "backlog", "doing"]
+        );
         assert!(reorder_columns(path, vec!["done".into(), "done".into(), "doing".into()]).is_err());
         let _ = fs::remove_dir_all(p);
     }

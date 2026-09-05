@@ -192,6 +192,12 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 .settings-card p { min-height: 38px; color: var(--text-muted); font-size: 13px; }
 .settings-card code { display: block; overflow: hidden; margin: 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-muted); color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; }
 .setting-status { display: flex; align-items: center; justify-content: space-between; }
+.hf-search { display: flex; gap: 8px; margin: 10px 0 14px; }
+.hf-search input { flex: 1; min-width: 0; margin: 0; }
+.model-recommendations { display: grid; gap: 7px; max-height: 260px; overflow: auto; margin: 8px 0 18px; padding: 0; list-style: none; }
+.model-recommendations li { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-muted); color: var(--text-muted); font-size: 12px; }
+.model-recommendations li a { color: var(--text); font-weight: 600; }
+.model-recommendations li button { float: right; padding: 5px 8px; font-size: 11px; }
 .setting-status strong { color: var(--text-muted); font-size: 12px; }
 .endpoint-id { margin-bottom: 14px; color: var(--text-faint); font-size: 11px; }
 

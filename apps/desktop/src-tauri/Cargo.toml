@@ -28,3 +28,6 @@ sha2 = { workspace = true }
 kanban-iroh = { path = "../../../crates/kanban-iroh" }
 iroh = "1.1"
 tokio = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+hf-hub = { version = "1", features = ["rustls-tls"] }
+llama-cpp-2 = { version = "0.1.156", default-features = true }
