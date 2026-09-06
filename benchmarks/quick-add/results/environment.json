@@ -1,0 +1,27 @@
+{
+  "hardware": "Apple M3 Pro, Mac15,6, 18 GiB unified memory",
+  "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "reference_timestamp": "2026-09-05T00:00:00+10:00",
+  "timezone": "Australia/Melbourne",
+  "backend": "llama-cpp-2 0.1.156, CPU, 0 GPU layers",
+  "context_tokens": 4096,
+  "max_output_tokens": 512,
+  "sampling": "greedy + JSON Schema grammar",
+  "cold_definition": "weights unloaded before request; OS file cache retained; backend initialized and model inspected before timing",
+  "warm_definition": "weights preloaded; fresh context for each timed request",
+  "timing_scope": "GGUF runtime generate call; excludes Tauri IPC and card persistence",
+  "model_sha256": {
+    "Qwen3-4B-Instruct-2507-Q4_K_M.gguf": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+    "qwen2.5-1.5b-instruct-q4_k_m.gguf": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+  },
+  "artifact_sha256": {
+    "benchmarks/quick-add/cases.json": "1f637c754541630b58162217fdef6f1d77fa72abf856e19372e8d8960411b954",
+    "apps/desktop/src-tauri/src/quick_add.rs": "b04480bb1111418bb8f4ee498789d6ef0a0e4c16cdd61acbabed3255d9aaba58",
+    "apps/desktop/src-tauri/src/gguf_runtime.rs": "41260c229fde202808d9a229c448c98020a6f8a82e8542fc19e0d9c03c64ac73",
+    "apps/desktop/src-tauri/examples/quick_add_bench.rs": "f8269f7fbdfca57e74bec0937cd324556f866e53fcfee5367a635ab34a63f8e3",
+    "target/release/examples/quick_add_bench": "75d608d1e3e69ad10d02194511aa0bde4ed49888fd51fba7de5e06014a07c484"
+  },
+  "source_commit": "e0601125c91df45133d6f0365b50d16bc931c317",
+  "source_dirty": true,
+  "total_planned_requests": 400
+}

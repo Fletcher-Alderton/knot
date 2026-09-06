@@ -1,0 +1,1377 @@
+[
+  {
+    "id": "qa-001",
+    "input": "Fix login timeout #bug in:doing",
+    "expected": {
+      "title": "Fix login timeout",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "bug"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label-column"
+    }
+  },
+  {
+    "id": "qa-002",
+    "input": "Plan spring campaign #marketing #priority in:backlog",
+    "expected": {
+      "title": "Plan spring campaign",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "marketing",
+        "priority"
+      ],
+      "due": null,
+      "start": null,
+      "category": "multi-label"
+    }
+  },
+  {
+    "id": "qa-003",
+    "input": "Submit expense report due:tomorrow",
+    "expected": {
+      "title": "Submit expense report",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-06",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-004",
+    "input": "Prepare board pack next Friday",
+    "expected": {
+      "title": "Prepare board pack",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-11",
+      "start": null,
+      "category": "next-friday"
+    }
+  },
+  {
+    "id": "qa-005",
+    "input": "Start gardening leave on 15 September",
+    "expected": {
+      "title": "Gardening leave",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": "2026-09-15",
+      "category": "start",
+      "title_any": [
+        "Gardening leave",
+        "Start Gardening leave"
+      ]
+    }
+  },
+  {
+    "id": "qa-006",
+    "input": "Start QA tomorrow, due Friday #qa in:doing",
+    "expected": {
+      "title": "QA",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "qa"
+      ],
+      "due": "2026-09-11",
+      "start": "2026-09-06",
+      "category": "due-start",
+      "title_any": [
+        "QA",
+        "Start QA"
+      ]
+    }
+  },
+  {
+    "id": "qa-007",
+    "input": "Begin deployment 29 September; deadline 2 October #release in:doing",
+    "expected": {
+      "title": "Deployment",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "release"
+      ],
+      "due": "2026-10-02",
+      "start": "2026-09-29",
+      "category": "month-transition",
+      "title_any": [
+        "Deployment",
+        "Begin deployment"
+      ]
+    }
+  },
+  {
+    "id": "qa-008",
+    "input": "Do not deploy to production yet",
+    "expected": {
+      "title": "Do not deploy to production yet",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-009",
+    "input": "Maybe book a room for workshop",
+    "expected": {
+      "title": "Maybe book a room for workshop",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "uncertain"
+    }
+  },
+  {
+    "id": "qa-010",
+    "input": "Send New Year staffing plan on 31 December 2026",
+    "expected": {
+      "title": "Send New Year staffing plan",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-12-31",
+      "start": null,
+      "category": "year-transition"
+    }
+  },
+  {
+    "id": "qa-011",
+    "input": "Book 2027 planning session for 5 January",
+    "expected": {
+      "title": "Book 2027 planning session",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2027-01-05",
+      "start": null,
+      "category": "year-transition"
+    }
+  },
+  {
+    "id": "qa-012",
+    "input": "Review privacy copy #legal #copy in:doing",
+    "expected": {
+      "title": "Review privacy copy",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "legal",
+        "copy"
+      ],
+      "due": null,
+      "start": null,
+      "category": "multi-label"
+    }
+  },
+  {
+    "id": "qa-013",
+    "input": "Book haircut for next Saturday",
+    "expected": {
+      "title": "Book haircut",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-12",
+      "start": null,
+      "category": "weekday"
+    }
+  },
+  {
+    "id": "qa-014",
+    "input": "Check weather for hike due:tomorrow",
+    "expected": {
+      "title": "Check weather for hike",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-06",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-015",
+    "input": "Once legal signs off, publish terms #legal in:doing",
+    "expected": {
+      "title": "Publish terms",
+      "body": "Once legal signs off",
+      "column": "doing",
+      "labels": [
+        "legal"
+      ],
+      "due": null,
+      "start": null,
+      "category": "dependency"
+    }
+  },
+  {
+    "id": "qa-016",
+    "input": "Write runbook with rollback steps",
+    "expected": {
+      "title": "Write runbook with rollback steps",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-017",
+    "input": "Don’t delete staging database",
+    "expected": {
+      "title": "Don’t delete staging database",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-018",
+    "input": "Review metrics due:next week",
+    "expected": {
+      "title": "Review metrics",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-07",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-019",
+    "input": "Renew domain next year on 5 September",
+    "expected": {
+      "title": "Renew domain",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2027-09-05",
+      "start": null,
+      "category": "year-transition"
+    }
+  },
+  {
+    "id": "qa-020",
+    "input": "Start Friday, finish Monday: migrate wiki",
+    "expected": {
+      "title": "Migrate wiki",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-14",
+      "start": "2026-09-11",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-021",
+    "input": "Draft migration plan start:2026-09-10 due:2026-09-14",
+    "expected": {
+      "title": "Draft migration plan",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-14",
+      "start": "2026-09-10",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-022",
+    "input": "Test billing changes start:Monday due:Friday #qa",
+    "expected": {
+      "title": "Test billing changes",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "qa"
+      ],
+      "due": "2026-09-11",
+      "start": "2026-09-07",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-023",
+    "input": "Write conference talk start:tomorrow due:30 September",
+    "expected": {
+      "title": "Write conference talk",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-30",
+      "start": "2026-09-06",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-024",
+    "input": "Prepare tax documents start:1 October due:15 October #admin",
+    "expected": {
+      "title": "Prepare tax documents",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "admin"
+      ],
+      "due": "2026-10-15",
+      "start": "2026-10-01",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-025",
+    "input": "Audit dependencies start:today due:in 3 days in:doing",
+    "expected": {
+      "title": "Audit dependencies",
+      "body": "",
+      "column": "doing",
+      "labels": [],
+      "due": "2026-09-08",
+      "start": "2026-09-05",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-026",
+    "input": "Redesign signup start:28 December due:4 January",
+    "expected": {
+      "title": "Redesign signup",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2027-01-04",
+      "start": "2026-12-28",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-027",
+    "input": "Translate help pages start:next Tuesday due:next Friday",
+    "expected": {
+      "title": "Translate help pages",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-11",
+      "start": "2026-09-08",
+      "category": "due-start"
+    }
+  },
+  {
+    "id": "qa-028",
+    "input": "Investigate crash on launch in:In Progress #bug",
+    "expected": {
+      "title": "Investigate crash on launch",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "bug"
+      ],
+      "due": null,
+      "start": null,
+      "category": "column-name"
+    }
+  },
+  {
+    "id": "qa-029",
+    "input": "Already finished: renew SSL certificate",
+    "expected": {
+      "title": "Renew SSL certificate",
+      "body": "",
+      "column": "done",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "natural-column"
+    }
+  },
+  {
+    "id": "qa-030",
+    "input": "Add load testing to the backlog",
+    "expected": {
+      "title": "Add load testing",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "natural-column",
+      "title_any": [
+        "Add load testing",
+        "Load testing"
+      ]
+    }
+  },
+  {
+    "id": "qa-031",
+    "input": "Put proofread proposal in In Progress",
+    "expected": {
+      "title": "Proofread proposal",
+      "body": "",
+      "column": "doing",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "natural-column"
+    }
+  },
+  {
+    "id": "qa-032",
+    "input": "Mark replace smoke alarm as done",
+    "expected": {
+      "title": "Replace smoke alarm",
+      "body": "",
+      "column": "done",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "natural-column"
+    }
+  },
+  {
+    "id": "qa-033",
+    "input": "Document C++ build flags #c++ #build",
+    "expected": {
+      "title": "Document C++ build flags",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "c++",
+        "build"
+      ],
+      "due": null,
+      "start": null,
+      "category": "punctuation-label"
+    }
+  },
+  {
+    "id": "qa-034",
+    "input": "Fix issue 123 in the issue tracker",
+    "expected": {
+      "title": "Fix issue 123 in the issue tracker",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "literal-number"
+    }
+  },
+  {
+    "id": "qa-035",
+    "input": "Read chapter 3 of the architecture book",
+    "expected": {
+      "title": "Read chapter 3 of the architecture book",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "literal-number"
+    }
+  },
+  {
+    "id": "qa-036",
+    "input": "Call café owner tomorrow #local",
+    "expected": {
+      "title": "Call café owner",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "local"
+      ],
+      "due": "2026-09-06",
+      "start": null,
+      "category": "unicode-date"
+    }
+  },
+  {
+    "id": "qa-037",
+    "input": "Send résumé to Zoë due:Monday",
+    "expected": {
+      "title": "Send résumé to Zoë",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-07",
+      "start": null,
+      "category": "unicode-date"
+    }
+  },
+  {
+    "id": "qa-038",
+    "input": "Check backup retention due:2026-09-30 #ops in:doing",
+    "expected": {
+      "title": "Check backup retention",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "ops"
+      ],
+      "due": "2026-09-30",
+      "start": null,
+      "category": "combined"
+    }
+  },
+  {
+    "id": "qa-039",
+    "input": "Order replacement cable due:day after tomorrow",
+    "expected": {
+      "title": "Order replacement cable",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-07",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-040",
+    "input": "Review account permissions due:in 10 days",
+    "expected": {
+      "title": "Review account permissions",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-15",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-041",
+    "input": "Send the client brief today",
+    "expected": {
+      "title": "Send the client brief",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-05",
+      "start": null,
+      "category": "due-today"
+    }
+  },
+  {
+    "id": "qa-042",
+    "input": "Pay the electricity bill tomorrow",
+    "expected": {
+      "title": "Pay the electricity bill",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-06",
+      "start": null,
+      "category": "due-tomorrow"
+    }
+  },
+  {
+    "id": "qa-043",
+    "input": "Check the deployment logs in 3 days",
+    "expected": {
+      "title": "Check the deployment logs",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-08",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-044",
+    "input": "Renew the lease in 2 weeks",
+    "expected": {
+      "title": "Renew the lease",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-19",
+      "start": null,
+      "category": "relative-due"
+    }
+  },
+  {
+    "id": "qa-045",
+    "input": "Submit the September forecast by 30 September",
+    "expected": {
+      "title": "Submit the September forecast",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-30",
+      "start": null,
+      "category": "month-end"
+    }
+  },
+  {
+    "id": "qa-046",
+    "input": "Open October registration on 1 October",
+    "expected": {
+      "title": "Open October registration",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-10-01",
+      "start": null,
+      "category": "month-transition"
+    }
+  },
+  {
+    "id": "qa-047",
+    "input": "Send board minutes on 12 September",
+    "expected": {
+      "title": "Send board minutes",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-12",
+      "start": null,
+      "category": "date"
+    }
+  },
+  {
+    "id": "qa-048",
+    "input": "Book the November offsite for 6 November",
+    "expected": {
+      "title": "Book the November offsite",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-11-06",
+      "start": null,
+      "category": "date"
+    }
+  },
+  {
+    "id": "qa-049",
+    "input": "Close the year-end checklist on 31 December",
+    "expected": {
+      "title": "Close the year-end checklist",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-12-31",
+      "start": null,
+      "category": "year-transition"
+    }
+  },
+  {
+    "id": "qa-050",
+    "input": "Review 2027 OKRs due:1 January",
+    "expected": {
+      "title": "Review 2027 OKRs",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2027-01-01",
+      "start": null,
+      "category": "year-transition"
+    }
+  },
+  {
+    "id": "qa-051",
+    "input": "File the grant application on 18 September",
+    "expected": {
+      "title": "File the grant application",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-18",
+      "start": null,
+      "category": "date"
+    }
+  },
+  {
+    "id": "qa-052",
+    "input": "Schedule warehouse count next Tuesday",
+    "expected": {
+      "title": "Schedule warehouse count",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-08",
+      "start": null,
+      "category": "weekday"
+    }
+  },
+  {
+    "id": "qa-053",
+    "input": "Pay the contractor next Friday",
+    "expected": {
+      "title": "Pay the contractor",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-11",
+      "start": null,
+      "category": "next-friday"
+    }
+  },
+  {
+    "id": "qa-054",
+    "input": "Review the agenda this Monday",
+    "expected": {
+      "title": "Review the agenda",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-09-07",
+      "start": null,
+      "category": "weekday"
+    }
+  },
+  {
+    "id": "qa-055",
+    "input": "Send the survey by 2 October",
+    "expected": {
+      "title": "Send the survey",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": "2026-10-02",
+      "start": null,
+      "category": "date"
+    }
+  },
+  {
+    "id": "qa-056",
+    "input": "Call the plumber about the leaking tap",
+    "expected": {
+      "title": "Call the plumber about the leaking tap",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-057",
+    "input": "Refactor the markdown parser",
+    "expected": {
+      "title": "Refactor the markdown parser",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-058",
+    "input": "Choose a birthday gift for Nina",
+    "expected": {
+      "title": "Choose a birthday gift for Nina",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-059",
+    "input": "Pick up the library holds",
+    "expected": {
+      "title": "Pick up the library holds",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-060",
+    "input": "Compare two home insurance quotes",
+    "expected": {
+      "title": "Compare two home insurance quotes",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-061",
+    "input": "Replace the bicycle light",
+    "expected": {
+      "title": "Replace the bicycle light",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-062",
+    "input": "Outline the podcast interview",
+    "expected": {
+      "title": "Outline the podcast interview",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-063",
+    "input": "Back up the family photos",
+    "expected": {
+      "title": "Back up the family photos",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-064",
+    "input": "Ask the landlord about the heater",
+    "expected": {
+      "title": "Ask the landlord about the heater",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-065",
+    "input": "Sort receipts for the accountant",
+    "expected": {
+      "title": "Sort receipts for the accountant",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "plain"
+    }
+  },
+  {
+    "id": "qa-066",
+    "input": "Triage iOS crash reports #mobile in:doing",
+    "expected": {
+      "title": "Triage iOS crash reports",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "mobile"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label-column"
+    }
+  },
+  {
+    "id": "qa-067",
+    "input": "Publish the accessibility statement #a11y in:done",
+    "expected": {
+      "title": "Publish the accessibility statement",
+      "body": "",
+      "column": "done",
+      "labels": [
+        "a11y"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label-column"
+    }
+  },
+  {
+    "id": "qa-068",
+    "input": "Draft launch email #marketing #copy",
+    "expected": {
+      "title": "Draft launch email",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "marketing",
+        "copy"
+      ],
+      "due": null,
+      "start": null,
+      "category": "multi-label"
+    }
+  },
+  {
+    "id": "qa-069",
+    "input": "Investigate payment retry bug #bug #backend in:doing",
+    "expected": {
+      "title": "Investigate payment retry bug",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "bug",
+        "backend"
+      ],
+      "due": null,
+      "start": null,
+      "category": "multi-label"
+    }
+  },
+  {
+    "id": "qa-070",
+    "input": "Order conference badges #event",
+    "expected": {
+      "title": "Order conference badges",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "event"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label"
+    }
+  },
+  {
+    "id": "qa-071",
+    "input": "Review supplier terms #legal in:doing",
+    "expected": {
+      "title": "Review supplier terms",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "legal"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label-column"
+    }
+  },
+  {
+    "id": "qa-072",
+    "input": "Archive resolved incident #incident in:done",
+    "expected": {
+      "title": "Archive resolved incident",
+      "body": "",
+      "column": "done",
+      "labels": [
+        "incident"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label-column"
+    }
+  },
+  {
+    "id": "qa-073",
+    "input": "Sketch settings page #design #ux",
+    "expected": {
+      "title": "Sketch settings page",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "design",
+        "ux"
+      ],
+      "due": null,
+      "start": null,
+      "category": "multi-label"
+    }
+  },
+  {
+    "id": "qa-074",
+    "input": "Rotate credentials #security",
+    "expected": {
+      "title": "Rotate credentials",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "security"
+      ],
+      "due": null,
+      "start": null,
+      "category": "label"
+    }
+  },
+  {
+    "id": "qa-075",
+    "input": "Plan team retro #people #planning in:doing",
+    "expected": {
+      "title": "Plan team retro",
+      "body": "",
+      "column": "doing",
+      "labels": [
+        "people",
+        "planning"
+      ],
+      "due": null,
+      "start": null,
+      "category": "multi-label"
+    }
+  },
+  {
+    "id": "qa-076",
+    "input": "Email Rosa about the invoice; Notes: Include the revised total",
+    "expected": {
+      "title": "Email Rosa about the invoice",
+      "body": "Include the revised total",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-077",
+    "input": "Write the incident runbook; Notes: Document rollback and escalation",
+    "expected": {
+      "title": "Write the incident runbook",
+      "body": "Document rollback and escalation",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-078",
+    "input": "Prepare the demo; Notes: Show offline edits and merge conflicts",
+    "expected": {
+      "title": "Prepare the demo",
+      "body": "Show offline edits and merge conflicts",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-079",
+    "input": "Update the README; Notes: Include macOS setup steps",
+    "expected": {
+      "title": "Update the README",
+      "body": "Include macOS setup steps",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-080",
+    "input": "Plan the offsite; Notes: Compare venue capacity and price",
+    "expected": {
+      "title": "Plan the offsite",
+      "body": "Compare venue capacity and price",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-081",
+    "input": "Fix the flaky test; Notes: Reproduce it with an empty board.",
+    "expected": {
+      "title": "Fix the flaky test",
+      "body": "Reproduce it with an empty board.",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-082",
+    "input": "Ask finance about the missing receipt; Notes: Attach July’s export",
+    "expected": {
+      "title": "Ask finance about the missing receipt",
+      "body": "Attach July’s export",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-083",
+    "input": "Create a handover note; Notes: For the on-call shift",
+    "expected": {
+      "title": "Create a handover note",
+      "body": "For the on-call shift",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-084",
+    "input": "Prepare a vendor shortlist; Notes: Include three options",
+    "expected": {
+      "title": "Prepare a vendor shortlist",
+      "body": "Include three options",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-085",
+    "input": "Review the copy; Notes: Flag claims needing legal approval",
+    "expected": {
+      "title": "Review the copy",
+      "body": "Flag claims needing legal approval",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "body-note"
+    }
+  },
+  {
+    "id": "qa-086",
+    "input": "Do not publish the draft announcement",
+    "expected": {
+      "title": "Do not publish the draft announcement",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "negation"
+    }
+  },
+  {
+    "id": "qa-087",
+    "input": "Don’t merge this branch yet",
+    "expected": {
+      "title": "Don’t merge this branch yet",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "negation"
+    }
+  },
+  {
+    "id": "qa-088",
+    "input": "Never delete the raw exports",
+    "expected": {
+      "title": "Never delete the raw exports",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "negation"
+    }
+  },
+  {
+    "id": "qa-089",
+    "input": "Skip the optional stand-up",
+    "expected": {
+      "title": "Skip the optional stand-up",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "negation"
+    }
+  },
+  {
+    "id": "qa-090",
+    "input": "No need to book anything",
+    "expected": {
+      "title": "No need to book anything",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "negation"
+    }
+  },
+  {
+    "id": "qa-091",
+    "input": "Maybe move the workshop later",
+    "expected": {
+      "title": "Maybe move the workshop later",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "ambiguous",
+      "title_any": [
+        "Maybe move the workshop later",
+        "Move the workshop later",
+        "Maybe move the workshop",
+        "Move the workshop"
+      ]
+    }
+  },
+  {
+    "id": "qa-092",
+    "input": "Handle the supplier question due:when convenient",
+    "expected": {
+      "title": "Handle the supplier question",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "ambiguous"
+    }
+  },
+  {
+    "id": "qa-093",
+    "input": "Follow up with Jo due:sometime soon",
+    "expected": {
+      "title": "Follow up with Jo",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "ambiguous"
+    }
+  },
+  {
+    "id": "qa-094",
+    "input": "Decide whether the old report is still needed",
+    "expected": {
+      "title": "Decide whether the old report is still needed",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "negation-ambiguous"
+    }
+  },
+  {
+    "id": "qa-095",
+    "input": "Consider a trip due:sometime in spring",
+    "expected": {
+      "title": "Consider a trip",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "ambiguous"
+    }
+  },
+  {
+    "id": "qa-096",
+    "input": "Réserver une table pour l’anniversaire",
+    "expected": {
+      "title": "Réserver une table pour l’anniversaire",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "unicode"
+    }
+  },
+  {
+    "id": "qa-097",
+    "input": "送信する：顧客への更新メール",
+    "expected": {
+      "title": "送信する：顧客への更新メール",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "unicode"
+    }
+  },
+  {
+    "id": "qa-098",
+    "input": "नए बजट की समीक्षा करें",
+    "expected": {
+      "title": "नए बजट की समीक्षा करें",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "unicode"
+    }
+  },
+  {
+    "id": "qa-099",
+    "input": "Überprüfe die Datenschutzkopie #legal",
+    "expected": {
+      "title": "Überprüfe die Datenschutzkopie",
+      "body": "",
+      "column": "backlog",
+      "labels": [
+        "legal"
+      ],
+      "due": null,
+      "start": null,
+      "category": "unicode"
+    }
+  },
+  {
+    "id": "qa-100",
+    "input": "レビュー用のスクリーンショットを撮る",
+    "expected": {
+      "title": "レビュー用のスクリーンショットを撮る",
+      "body": "",
+      "column": "backlog",
+      "labels": [],
+      "due": null,
+      "start": null,
+      "category": "unicode"
+    }
+  }
+]

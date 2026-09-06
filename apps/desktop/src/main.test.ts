@@ -197,10 +197,10 @@ describe('Kanban UI',()=>{
 
  it('installs and activates a recommended model in one click',async()=>{
    state.view='settings';state.error='';state.localModels=[];state.modelSettings={};state.modelLoading=false;
-   const installed={id:'qwen.gguf',provider:'huggingface',name:'Qwen',source:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',size_bytes:1_100_000_000};
+   const installed={id:'qwen.gguf',provider:'huggingface',name:'Qwen',source:'unsloth/Qwen3.5-4B-GGUF',size_bytes:2_600_000_000};
    const invoke=vi.fn(async(command:string)=>{if(command==='download_huggingface_gguf')return installed;if(command==='save_model_settings')return null;if(command==='model_settings')return {provider:'huggingface',model_id:'qwen.gguf'};if(command==='list_local_models')return [installed];throw new Error(command)});
-   setInvokeForTests(invoke as any);render();document.querySelector<HTMLElement>('[data-install-recommended]')!.click();
-   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('download_huggingface_gguf',expect.objectContaining({repoId:'Qwen/Qwen2.5-1.5B-Instruct-GGUF'})));
+   setInvokeForTests(invoke as any);render();document.querySelector<HTMLElement>('[data-install-recommended][data-repo="'+installed.source+'"]')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('download_huggingface_gguf',expect.objectContaining({repoId:'unsloth/Qwen3.5-4B-GGUF'})));
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:{provider:'huggingface',model_id:'qwen.gguf'}}));
    expect(state.modelSettings.model_id).toBe('qwen.gguf');setInvokeForTests(null);
  });
@@ -211,6 +211,18 @@ describe('Kanban UI',()=>{
    setInvokeForTests(invoke as any);render();document.querySelector<HTMLElement>('[data-select-model="local.gguf"]')!.click();
    await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:{provider:'huggingface',model_id:'local.gguf'}}));
    setInvokeForTests(null);
+ });
+
+ it('loads and unloads the selected model from the settings toggle',async()=>{
+   state.view='settings';state.error='';state.modelLoading=false;state.modelFeedback='';state.localModels=[{id:'local.gguf',provider:'huggingface',name:'Local model',source:'repo',size_bytes:2048}];state.modelSettings={provider:'huggingface',model_id:'local.gguf',keep_model_loaded:false};
+   const invoke=vi.fn(async(command:string)=>command==='unload_local_model'?true:null);setInvokeForTests(invoke as any);render();
+   const toggle=document.querySelector<HTMLInputElement>('#keep-model-loaded')!;toggle.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('load_local_model',{id:'local.gguf'}));
+   expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:expect.objectContaining({keep_model_loaded:true})});
+   await vi.waitFor(()=>expect(state.modelSettings.keep_model_loaded).toBe(true));
+   document.querySelector<HTMLInputElement>('#keep-model-loaded')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('unload_local_model',undefined));
+   expect(state.modelSettings.keep_model_loaded).toBe(false);setInvokeForTests(null);
  });
 
  it('keeps the Ollama empty state accessible and refreshes the edited URL',async()=>{
@@ -235,5 +247,23 @@ describe('Kanban UI',()=>{
    expect(progress.value).toBe(50);expect(progress.max).toBe(100);
    expect(document.querySelector('.download-progress')?.textContent).toContain('512.0 MB of 1.0 GB');
    expect(document.querySelector('.download-progress')?.textContent).toContain('12.0 MB/s');
+ });
+
+ it('runs only one Quick Add request while submission is pending',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[];state.quickAddOpen=true;state.modelSettings={provider:'huggingface',model_id:'local.gguf'};
+   let finishParse!:(value:any)=>void;
+   const parsed=new Promise(resolve=>{finishParse=resolve;});
+   const invoke=vi.fn(async(command:string)=>{if(command==='parse_quick_add')return parsed;if(command==='add_card')return {id:'new',title:'Task',body:'',column:'backlog',labels:[]};throw new Error(command)});
+   setInvokeForTests(invoke as any);render();
+   document.querySelector<HTMLInputElement>('#quick-add-input')!.value='Task tomorrow';
+   const form=document.querySelector<HTMLFormElement>('#quick-add-form')!;
+   form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+   form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+   expect(invoke.mock.calls.filter(([command])=>command==='parse_quick_add')).toHaveLength(1);
+   expect(form.getAttribute('aria-busy')).toBe('true');
+   finishParse({title:'Task',body:'',column:'backlog',labels:[],due:'2026-09-06',start:'2026-09-05',confidence:1,warnings:[]});
+   await vi.waitFor(()=>expect(state.cards).toHaveLength(1));
+   expect(invoke).toHaveBeenCalledWith('add_card',{path:'/board',input:{title:'Task',body:'',column:'backlog',labels:[],due:'2026-09-06',start:'2026-09-05',position:1000}});
+   setInvokeForTests(null);
  });
 });

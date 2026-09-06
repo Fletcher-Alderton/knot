@@ -1,6 +1,10 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, time::{Duration, Instant}};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -20,11 +24,28 @@ pub struct LocalModel {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSettings {
     pub provider: Option<ModelProvider>,
     pub model_id: Option<String>,
     pub ollama_url: Option<String>,
+    #[serde(default = "default_keep_model_loaded")]
+    pub keep_model_loaded: bool,
+}
+
+fn default_keep_model_loaded() -> bool {
+    true
+}
+
+impl Default for ModelSettings {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            model_id: None,
+            ollama_url: None,
+            keep_model_loaded: true,
+        }
+    }
 }
 
 pub fn models_root() -> PathBuf {
@@ -179,13 +200,19 @@ pub async fn list_ollama_models(raw_url: &str) -> Result<Vec<OllamaModel>, Strin
         .collect())
 }
 
-pub async fn ollama_generate(raw_url: &str, model: &str, prompt: &str) -> Result<String, String> {
+pub async fn ollama_generate(
+    raw_url: &str,
+    model: &str,
+    prompt: &str,
+    schema: &serde_json::Value,
+    keep_loaded: bool,
+) -> Result<String, String> {
     let url = validate_ollama_url(raw_url)?;
     if model.trim().is_empty() {
         return Err("an Ollama model is required".into());
     }
     let response = reqwest::Client::new().post(format!("{url}/api/generate"))
-        .json(&serde_json::json!({"model": model, "prompt": prompt, "stream": false, "format": "json"}))
+        .json(&serde_json::json!({"model": model, "prompt": prompt, "stream": false, "format": schema, "keep_alive": if keep_loaded { -1 } else { 0 }, "options": {"temperature": 0, "num_predict": crate::quick_add::COMPACT_MAX_TOKENS }}))
         .send().await.map_err(|e| format!("Ollama is unavailable: {e}"))?
         .error_for_status().map_err(|e| e.to_string())?
         .json::<serde_json::Value>().await.map_err(|e| format!("invalid Ollama response: {e}"))?;
@@ -278,7 +305,9 @@ where
         .map_err(|e| e.to_string())?;
     let total_bytes = response.content_length();
     let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(&partial_path).await.map_err(|e| e.to_string())?;
+    let mut file = tokio::fs::File::create(&partial_path)
+        .await
+        .map_err(|e| e.to_string())?;
     let started = Instant::now();
     let mut last_update = started;
     let mut downloaded_bytes = 0u64;
@@ -289,15 +318,27 @@ where
         let now = Instant::now();
         if now.duration_since(last_update) >= Duration::from_millis(100) {
             let elapsed = now.duration_since(started).as_secs_f64().max(0.001);
-            on_progress(DownloadProgress { filename: filename.into(), downloaded_bytes, total_bytes, bytes_per_second: downloaded_bytes as f64 / elapsed });
+            on_progress(DownloadProgress {
+                filename: filename.into(),
+                downloaded_bytes,
+                total_bytes,
+                bytes_per_second: downloaded_bytes as f64 / elapsed,
+            });
             last_update = now;
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
-    tokio::fs::rename(&partial_path, &path).await.map_err(|e| e.to_string())?;
+    tokio::fs::rename(&partial_path, &path)
+        .await
+        .map_err(|e| e.to_string())?;
     let elapsed = started.elapsed().as_secs_f64().max(0.001);
-    on_progress(DownloadProgress { filename: filename.into(), downloaded_bytes, total_bytes: total_bytes.or(Some(downloaded_bytes)), bytes_per_second: downloaded_bytes as f64 / elapsed });
+    on_progress(DownloadProgress {
+        filename: filename.into(),
+        downloaded_bytes,
+        total_bytes: total_bytes.or(Some(downloaded_bytes)),
+        bytes_per_second: downloaded_bytes as f64 / elapsed,
+    });
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
     Ok(LocalModel {
         id: filename.into(),
@@ -314,6 +355,7 @@ mod tests {
     use super::*;
     #[test]
     fn validates_local_ollama_endpoint() {
+        assert!(ModelSettings::default().keep_model_loaded);
         assert!(validate_ollama_url("http://localhost:11434").is_ok());
         assert!(validate_ollama_url("https://remote.example").is_err());
     }

@@ -21,6 +21,7 @@ use std::{
 
 mod gguf_runtime;
 mod model_manager;
+pub mod quick_add;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardColumn {
@@ -48,16 +49,86 @@ pub struct CardInfo {
     pub updated_at: Option<String>,
     pub revision: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ParsedCardDraft {
+    #[serde(deserialize_with = "deserialize_null_default")]
     pub title: String,
+    #[serde(deserialize_with = "deserialize_null_default")]
     pub body: String,
+    #[serde(deserialize_with = "deserialize_null_default")]
     pub column: String,
+    #[serde(deserialize_with = "deserialize_null_default")]
     pub labels: Vec<String>,
     pub due: Option<String>,
     pub start: Option<String>,
+    #[serde(deserialize_with = "deserialize_null_default")]
     pub confidence: f32,
+    #[serde(deserialize_with = "deserialize_null_default")]
     pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
+fn parse_model_draft(raw: &str) -> Result<ParsedCardDraft, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("model returned an empty response".into());
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Ok(draft) = serde_json::from_value(value) {
+            return Ok(draft);
+        }
+    }
+    let mut start = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in trimmed.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' if start.is_some() => in_string = true,
+            '{' => {
+                if start.is_none() {
+                    start = Some(index);
+                }
+                depth += 1;
+            }
+            '}' if start.is_some() => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let json = &trimmed[start.expect("set above")..index + ch.len_utf8()];
+                    let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+                        format!("model returned invalid quick-add JSON: {error}")
+                    })?;
+                    return serde_json::from_value(value).map_err(|error| {
+                        format!("model returned invalid quick-add JSON: {error}")
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    let preview: String = trimmed.chars().take(160).collect();
+    Err(format!(
+        "model did not return a JSON object (response began: {preview})"
+    ))
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchEvent {
@@ -115,6 +186,10 @@ pub struct CardInput {
     #[serde(default)]
     pub labels: Vec<String>,
     pub position: Option<i64>,
+    #[serde(default)]
+    pub due: Option<String>,
+    #[serde(default)]
+    pub start: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -535,6 +610,16 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
 }
 
 fn with_mutation(path: &str, id: &str, input: CardInput) -> Result<CardInfo, String> {
+    for (name, value) in [
+        ("due", input.due.as_deref()),
+        ("start", input.start.as_deref()),
+    ] {
+        if let Some(value) = value {
+            if chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() || value.len() != 10 {
+                return Err(format!("{name} must be a valid YYYY-MM-DD date"));
+            }
+        }
+    }
     let mut s = board(path)?;
     let old = s.read_card(id).ok();
     let mut fm = old
@@ -559,6 +644,13 @@ fn with_mutation(path: &str, id: &str, input: CardInput) -> Result<CardInfo, Str
     fm.column = input.column;
     fm.position = input.position.unwrap_or(fm.position);
     fm.labels = input.labels;
+    if let Some(due) = input.due {
+        fm.due = Some(due);
+    }
+    if let Some(start) = input.start {
+        fm.extra
+            .insert("start".into(), serde_yaml::Value::String(start));
+    }
     fm.sync = Some(SyncMetadata {
         revision: Some(rid),
         parents: parent.into_iter().collect(),
@@ -760,15 +852,23 @@ mod commands {
             .ok_or("configure a local NLP model first")?;
         let model = settings.model_id.ok_or("choose a model first")?;
         let info = inspect(path)?;
-        let columns = info
+        let column_pairs = info
             .columns
             .iter()
-            .map(|c| format!("{}={}", c.id, c.name))
+            .map(|column| (column.id.clone(), column.name.clone()))
+            .collect::<Vec<_>>();
+        let columns = column_pairs
+            .iter()
+            .map(|(id, name)| format!("{id}={name}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let prompt = format!(
-            "Return JSON only with title, body, column, labels, due, start, confidence, warnings. Extract a task from the input. Valid columns: {columns}. Dates must be ISO-8601 dates or null. Input: {text}"
-        );
+        let column_ids = column_pairs
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let hints = quick_add::deterministic_hints(&text, &column_pairs);
+        let schema = quick_add::compact_schema(&column_ids);
+        let prompt = quick_add::compact_prompt(&hints.model_input, &columns);
         let raw = match provider {
             model_manager::ModelProvider::Ollama => {
                 model_manager::ollama_generate(
@@ -778,6 +878,8 @@ mod commands {
                         .unwrap_or("http://127.0.0.1:11434"),
                     &model,
                     &prompt,
+                    &schema,
+                    settings.keep_model_loaded,
                 )
                 .await?
             }
@@ -787,11 +889,30 @@ mod commands {
                     .find(|m| m.id == model)
                     .ok_or("selected Hugging Face model is not installed")?;
                 let path = local.path.ok_or("selected model has no local path")?;
-                gguf_runtime::generate(&path, &model_manager::models_root(), &prompt, 256)?
+                gguf_runtime::generate(
+                    &path,
+                    &model_manager::models_root(),
+                    &prompt,
+                    quick_add::COMPACT_MAX_TOKENS,
+                    settings.keep_model_loaded,
+                    &schema,
+                )?
             }
         };
-        let mut draft: ParsedCardDraft = serde_json::from_str(&raw)
-            .map_err(|e| format!("model returned invalid quick-add JSON: {e}"))?;
+        let compact: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|error| format!("model returned invalid Quick Add JSON: {error}"))?;
+        let mut expanded = quick_add::expand_compact(&compact)?;
+        let object = expanded
+            .as_object_mut()
+            .ok_or("Quick Add output must be an object")?;
+        object.insert("body".into(), serde_json::Value::String(hints.body));
+        object.insert("column".into(), serde_json::Value::String(hints.column));
+        object.insert(
+            "labels".into(),
+            serde_json::to_value(hints.labels).map_err(|e| e.to_string())?,
+        );
+        let mut draft: ParsedCardDraft = serde_json::from_value(expanded)
+            .map_err(|error| format!("model returned invalid quick-add JSON: {error}"))?;
         if draft.title.trim().is_empty() {
             return Err("model returned an empty title".into());
         }
@@ -817,6 +938,9 @@ mod commands {
             }
         }
         draft.confidence = draft.confidence.clamp(0.0, 1.0);
+        let validated = serde_json::to_value(&draft).map_err(|e| e.to_string())?;
+        quick_add::validate_output(&validated, &column_ids)
+            .map_err(|error| format!("model returned invalid Quick Add data: {error}"))?;
         Ok(draft)
     }
 
@@ -836,7 +960,28 @@ mod commands {
     ) -> Result<model_manager::LocalModel, String> {
         model_manager::download_huggingface_gguf(&repo_id, &filename, |progress| {
             let _ = app.emit("model-download-progress", progress);
-        }).await
+        })
+        .await
+    }
+    fn local_model_path(id: &str) -> Result<String, String> {
+        model_manager::list_local_models()?
+            .into_iter()
+            .find(|model| model.id == id)
+            .ok_or_else(|| "selected Hugging Face model is not installed".to_string())?
+            .path
+            .ok_or_else(|| "selected model has no local path".to_string())
+    }
+    #[tauri::command]
+    pub fn load_local_model(id: String) -> Result<(), String> {
+        gguf_runtime::load_model(&local_model_path(&id)?, &model_manager::models_root())
+    }
+    #[tauri::command]
+    pub fn unload_local_model() -> Result<bool, String> {
+        gguf_runtime::unload_model()
+    }
+    #[tauri::command]
+    pub fn local_model_loaded(id: String) -> Result<bool, String> {
+        gguf_runtime::model_loaded(&local_model_path(&id)?, &model_manager::models_root())
     }
     #[tauri::command]
     pub fn inspect_local_model(path: String) -> Result<gguf_runtime::GgufModelInfo, String> {
@@ -1093,6 +1238,8 @@ title: My board
                 column,
                 labels: old.labels,
                 position,
+                due: None,
+                start: None,
             },
         )
     }
@@ -1339,6 +1486,9 @@ pub fn run() {
             commands::search_huggingface_models,
             commands::download_huggingface_gguf,
             commands::parse_quick_add,
+            commands::load_local_model,
+            commands::unload_local_model,
+            commands::local_model_loaded,
             commands::inspect_local_model
         ])
         .run(tauri::generate_context!())
@@ -1348,6 +1498,29 @@ pub fn run() {
 mod tests {
     use super::commands::*;
     use super::*;
+
+    #[test]
+    fn parses_json_from_chatty_model_responses() {
+        let raw = r#"Here is the result:
+```json
+{"title":"Ship it","body":"","column":"doing","labels":[],"due":null,"start":null,"confidence":0.9,"warnings":[]}
+```"#;
+        let draft = parse_model_draft(raw).unwrap();
+        assert_eq!(draft.title, "Ship it");
+        assert_eq!(draft.column, "doing");
+        let nulls = parse_model_draft(
+            r#"{"title":"Task","body":null,"column":null,"labels":null,"confidence":null,"warnings":null}"#,
+        )
+        .unwrap();
+        assert_eq!(nulls.confidence, 0.0);
+        assert!(nulls.labels.is_empty());
+        assert!(
+            parse_model_draft("   ")
+                .unwrap_err()
+                .contains("empty response")
+        );
+    }
+
     #[test]
     fn board_metadata_commands_persist() {
         let p = std::env::temp_dir().join(format!("luna-board-meta-{}", std::process::id()));
@@ -1486,6 +1659,8 @@ body";
                 column: "backlog".into(),
                 labels: vec![],
                 position: None,
+                due: Some("2026-09-12".into()),
+                start: Some("2026-09-10".into()),
             },
         )
         .unwrap();
@@ -1494,6 +1669,17 @@ body";
                 .unwrap()
                 .title,
             "T"
+        );
+        let raw = fs::read_to_string(p.join("cards").join(format!("{}.md", c.id))).unwrap();
+        let parsed = Card::parse(&raw).unwrap();
+        assert_eq!(parsed.frontmatter.due.as_deref(), Some("2026-09-12"));
+        assert_eq!(
+            parsed
+                .frontmatter
+                .extra
+                .get("start")
+                .and_then(|v| v.as_str()),
+            Some("2026-09-10")
         );
         update_card(
             p.to_string_lossy().into(),
@@ -1504,9 +1690,22 @@ body";
                 column: "done".into(),
                 labels: vec![],
                 position: None,
+                due: None,
+                start: None,
             },
         )
         .unwrap();
+        let raw = fs::read_to_string(p.join("cards").join(format!("{}.md", c.id))).unwrap();
+        let parsed = Card::parse(&raw).unwrap();
+        assert_eq!(parsed.frontmatter.due.as_deref(), Some("2026-09-12"));
+        assert_eq!(
+            parsed
+                .frontmatter
+                .extra
+                .get("start")
+                .and_then(|v| v.as_str()),
+            Some("2026-09-10")
+        );
         assert!(delete_card(p.to_string_lossy().into(), c.id).unwrap());
         let revisions = fs::read_dir(p.join(".kanban/revisions")).unwrap().count();
         assert_eq!(revisions, 3);
@@ -1527,6 +1726,8 @@ body";
                 column: "backlog".into(),
                 labels: vec![],
                 position: Some(1),
+                due: None,
+                start: None,
             },
         )
         .unwrap();
@@ -1549,6 +1750,8 @@ body";
                     column: "backlog".into(),
                     labels: vec![],
                     position: Some(1),
+                    due: None,
+                    start: None,
                 },
                 remote: CardInput {
                     title: "remote".into(),
@@ -1556,6 +1759,8 @@ body";
                     column: "done".into(),
                     labels: vec![],
                     position: Some(2),
+                    due: None,
+                    start: None,
                 },
                 manual: Some(CardInput {
                     title: "merged".into(),
@@ -1563,6 +1768,8 @@ body";
                     column: "doing".into(),
                     labels: vec!["merged".into()],
                     position: Some(3),
+                    due: None,
+                    start: None,
                 }),
                 parent_revision_ids: vec![first.clone(), second.clone()],
             },
