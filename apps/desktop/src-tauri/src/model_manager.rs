@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 pub enum ModelProvider {
     HuggingFace,
     Ollama,
+    OpenAI,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,6 +30,8 @@ pub struct ModelSettings {
     pub provider: Option<ModelProvider>,
     pub model_id: Option<String>,
     pub ollama_url: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub openai_api_key: Option<String>,
     #[serde(default = "default_keep_model_loaded")]
     pub keep_model_loaded: bool,
 }
@@ -43,6 +46,8 @@ impl Default for ModelSettings {
             provider: None,
             model_id: None,
             ollama_url: None,
+            openai_base_url: None,
+            openai_api_key: None,
             keep_model_loaded: true,
         }
     }
@@ -223,6 +228,167 @@ pub async fn ollama_generate(
         .ok_or_else(|| "Ollama returned no generated response".into())
 }
 
+pub const DEFAULT_OPENAI_BASE_URL: &str = "https://openrouter.ai/api/v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenAIModel {
+    pub id: String,
+    pub created: Option<u64>,
+    pub owned_by: Option<String>,
+}
+
+pub fn validate_openai_base_url(raw: &str) -> Result<String, String> {
+    let url = raw.trim().trim_end_matches('/');
+    if url.is_empty() {
+        return Err("an OpenAI-compatible base URL is required".into());
+    }
+    let scheme_end = url
+        .find("://")
+        .filter(|i| matches!(&url[..*i], "http" | "https"))
+        .ok_or("the base URL must start with http:// or https://")?;
+    if url.chars().any(char::is_whitespace) {
+        return Err("the base URL is malformed".into());
+    }
+    let host = url[scheme_end + 3..]
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    if host.is_empty() {
+        return Err("the base URL must include a host".into());
+    }
+    Ok(url.into())
+}
+
+pub fn openai_chat_request(
+    model: &str,
+    prompt: &str,
+    schema: &serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": crate::quick_add::COMPACT_MAX_TOKENS,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "quick_add",
+                "strict": true,
+                "schema": schema,
+            }
+        }
+    })
+}
+
+pub fn openai_extract_text(response: &serde_json::Value) -> Result<String, String> {
+    response
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| "OpenAI API returned no message content".into())
+}
+
+pub fn parse_openai_models(response: &serde_json::Value) -> Vec<OpenAIModel> {
+    response
+        .get("data")
+        .and_then(|data| data.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|model| {
+            Some(OpenAIModel {
+                id: model.get("id")?.as_str()?.to_owned(),
+                created: model.get("created").and_then(|v| v.as_u64()),
+                owned_by: model
+                    .get("owned_by")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+pub async fn list_openai_models(
+    raw_base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<OpenAIModel>, String> {
+    let base_url = validate_openai_base_url(raw_base_url)?;
+    let mut request = reqwest::Client::new().get(format!("{base_url}/models"));
+    if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI API is unavailable: {e}"))?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("invalid OpenAI API response: {e}"))?;
+    Ok(parse_openai_models(&response))
+}
+
+pub fn openai_access_check_url(raw_base_url: &str) -> Result<String, String> {
+    let base_url = validate_openai_base_url(raw_base_url)?;
+    let authority = base_url.split_once("://").map(|(_, authority)| authority).unwrap_or_default();
+    let host = authority.split('/').next().unwrap_or_default().split('@').next_back().unwrap_or_default().split(':').next().unwrap_or_default();
+    let path = if host.eq_ignore_ascii_case("openrouter.ai") { "auth/key" } else { "models" };
+    Ok(format!("{base_url}/{path}"))
+}
+
+pub async fn check_openai_access(
+    raw_base_url: &str,
+    api_key: Option<&str>,
+) -> Result<(), String> {
+    let key = api_key
+        .filter(|key| !key.trim().is_empty())
+        .ok_or("an API key is required to check access")?;
+    let url = openai_access_check_url(raw_base_url)?;
+    reqwest::Client::new()
+        .get(url)
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI API is unavailable: {e}"))?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub async fn openai_chat_completion(
+    raw_base_url: &str,
+    api_key: Option<&str>,
+    model: &str,
+    prompt: &str,
+    schema: &serde_json::Value,
+) -> Result<String, String> {
+    let base_url = validate_openai_base_url(raw_base_url)?;
+    if model.trim().is_empty() {
+        return Err("an OpenAI-compatible model is required".into());
+    }
+    let mut request = reqwest::Client::new()
+        .post(format!("{base_url}/chat/completions"))
+        .json(&openai_chat_request(model, prompt, schema));
+    if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI API is unavailable: {e}"))?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("invalid OpenAI API response: {e}"))?;
+    openai_extract_text(&response)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HuggingFaceModel {
     pub id: String,
@@ -353,6 +519,153 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn openai_provider_serializes_as_openai() {
+        let json = serde_json::to_string(&ModelProvider::OpenAI).unwrap();
+        assert_eq!(json, r#""openai""#);
+        let parsed: ModelProvider = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ModelProvider::OpenAI);
+    }
+    #[test]
+    fn openai_settings_default_and_backwards_compatible() {
+        let settings = ModelSettings::default();
+        assert_eq!(settings.openai_base_url, None);
+        assert_eq!(settings.openai_api_key, None);
+        // Settings files written before the OpenAI provider existed lack these fields.
+        let legacy = r#"{"provider":"ollama","model_id":"llama3","ollama_url":"http://127.0.0.1:11434","keep_model_loaded":false}"#;
+        let parsed: ModelSettings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.provider, Some(ModelProvider::Ollama));
+        assert_eq!(parsed.openai_base_url, None);
+        assert_eq!(parsed.openai_api_key, None);
+        assert!(!parsed.keep_model_loaded);
+        // An OpenAI-configured settings file round-trips.
+        let saved = serde_json::to_string(&ModelSettings {
+            provider: Some(ModelProvider::OpenAI),
+            model_id: Some("openai/gpt-4o-mini".into()),
+            openai_base_url: Some("https://openrouter.ai/api/v1".into()),
+            openai_api_key: Some("sk-or-test".into()),
+            ..ModelSettings::default()
+        })
+        .unwrap();
+        let round_trip: ModelSettings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(round_trip.provider, Some(ModelProvider::OpenAI));
+        assert_eq!(
+            round_trip.openai_base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(round_trip.openai_api_key.as_deref(), Some("sk-or-test"));
+    }
+    #[test]
+    fn validates_openai_base_urls() {
+        assert_eq!(
+            validate_openai_base_url("https://openrouter.ai/api/v1").unwrap(),
+            "https://openrouter.ai/api/v1"
+        );
+        assert_eq!(
+            validate_openai_base_url("  https://api.openai.com/v1/  ").unwrap(),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            validate_openai_base_url("http://localhost:8080/v1").unwrap(),
+            "http://localhost:8080/v1"
+        );
+        assert!(validate_openai_base_url("").is_err());
+        assert!(validate_openai_base_url("   ").is_err());
+        assert!(validate_openai_base_url("openrouter.ai/api/v1").is_err());
+        assert!(validate_openai_base_url("ftp://example.com/v1").is_err());
+        assert!(validate_openai_base_url("https://").is_err());
+        assert!(validate_openai_base_url("https://exa mple.com").is_err());
+    }
+    #[test]
+    fn openai_chat_request_has_exact_shape() {
+        let schema = serde_json::json!({"type": "object"});
+        let body = openai_chat_request("openai/gpt-4o-mini", "make a card", &schema);
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "model": "openai/gpt-4o-mini",
+                "messages": [{"role": "user", "content": "make a card"}],
+                "temperature": 0,
+                "max_tokens": crate::quick_add::COMPACT_MAX_TOKENS,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "quick_add",
+                        "strict": true,
+                        "schema": {"type": "object"}
+                    }
+                }
+            })
+        );
+    }
+    #[test]
+    fn openai_extract_text_reads_choice_content() {
+        let response = serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": r#"{"title":"T"}"#}}]
+        });
+        assert_eq!(openai_extract_text(&response).unwrap(), r#"{"title":"T"}"#);
+        assert!(openai_extract_text(&serde_json::json!({})).is_err());
+        assert!(openai_extract_text(&serde_json::json!({"choices": []})).is_err());
+        assert!(openai_extract_text(&serde_json::json!({"choices": [{}]})).is_err());
+        assert!(
+            openai_extract_text(&serde_json::json!({
+                "choices": [{"message": {"content": 42}}]
+            }))
+            .is_err()
+        );
+        assert!(
+            openai_extract_text(&serde_json::json!({
+                "choices": [{"message": {"content": null}}]
+            }))
+            .is_err()
+        );
+    }
+    #[test]
+    fn parse_openai_models_skips_bad_entries() {
+        let response = serde_json::json!({
+            "data": [
+                {"id": "openai/gpt-4o-mini", "created": 1716768000, "owned_by": "openai"},
+                {"id": "openai/gpt-4o"},
+                {"created": 123, "owned_by": "no-id"},
+                "not-an-object",
+                {"id": 7}
+            ]
+        });
+        let models = parse_openai_models(&response);
+        assert_eq!(
+            models,
+            vec![
+                OpenAIModel {
+                    id: "openai/gpt-4o-mini".into(),
+                    created: Some(1716768000),
+                    owned_by: Some("openai".into()),
+                },
+                OpenAIModel {
+                    id: "openai/gpt-4o".into(),
+                    created: None,
+                    owned_by: None,
+                },
+            ]
+        );
+        assert!(parse_openai_models(&serde_json::json!({})).is_empty());
+        assert!(parse_openai_models(&serde_json::json!({"data": {}})).is_empty());
+    }
+    #[test]
+    fn chooses_a_key_validation_endpoint_for_openrouter_and_generic_apis() {
+        assert_eq!(
+            openai_access_check_url("https://openrouter.ai/api/v1").unwrap(),
+            "https://openrouter.ai/api/v1/auth/key"
+        );
+        assert_eq!(
+            openai_access_check_url("https://api.openai.com/v1/").unwrap(),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            openai_access_check_url("http://localhost:8080/v1").unwrap(),
+            "http://localhost:8080/v1/models"
+        );
+        assert!(openai_access_check_url("not a URL").is_err());
+    }
     #[test]
     fn validates_local_ollama_endpoint() {
         assert!(ModelSettings::default().keep_model_loaded);

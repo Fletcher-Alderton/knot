@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests } from './main';
+import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess } from './main';
 
 describe('Kanban UI',()=>{
  it('escapes card content before rendering',()=>expect(renderCardText('<script>')).toBe('&lt;script&gt;'));
@@ -265,5 +265,139 @@ describe('Kanban UI',()=>{
    await vi.waitFor(()=>expect(state.cards).toHaveLength(1));
    expect(invoke).toHaveBeenCalledWith('add_card',{path:'/board',input:{title:'Task',body:'',column:'backlog',labels:[],due:'2026-09-06',start:'2026-09-05',position:1000}});
    setInvokeForTests(null);
+ });
+});
+
+describe('OpenAI-compatible provider',()=>{
+ it('loads OpenAI-compatible models with the configured base URL and key',async()=>{
+  state.openaiModels=[];state.modelSettings={openai_api_key:'sk-saved'};state.error='';state.modelLoading=false;
+  const models=[{id:'anthropic/claude-sonnet-4',created:1,owned_by:'anthropic'},{id:'openai/gpt-4o'}];
+  const invoke=vi.fn(async(command:string)=>{if(command==='list_openai_models')return models;throw new Error(command)});
+  setInvokeForTests(invoke as any);
+  await loadOpenAIModels('https://openrouter.ai/api/v1','sk-test');
+  expect(invoke).toHaveBeenCalledWith('list_openai_models',{baseUrl:'https://openrouter.ai/api/v1',apiKey:'sk-test'});
+  expect(state.openaiModels).toEqual(models);
+  expect(state.modelSettings.openai_base_url).toBe('https://openrouter.ai/api/v1');
+  expect(state.error).toBe('');
+  setInvokeForTests(async()=>{throw new Error('unauthorized')});
+  await loadOpenAIModels();
+  expect(state.error).toContain('unauthorized');
+  setInvokeForTests(null);
+ });
+ it('fetches OpenAI models during loadModels when the provider is openai, tolerating list failures',async()=>{
+  state.openaiModels=[];state.error='';
+  const settings={provider:'openai' as const,model_id:'openai/gpt-4o',openai_api_key:'sk-x',openai_base_url:'https://openrouter.ai/api/v1'};
+  const invoke=vi.fn(async(command:string)=>{if(command==='model_settings')return settings;if(command==='list_local_models')return [];if(command==='list_openai_models')return [{id:'openai/gpt-4o'}];throw new Error(command)});
+  setInvokeForTests(invoke as any);
+  await loadModels();
+  expect(invoke).toHaveBeenCalledWith('list_openai_models',{baseUrl:'https://openrouter.ai/api/v1',apiKey:'sk-x'});
+  expect(state.openaiModels[0]?.id).toBe('openai/gpt-4o');
+  setInvokeForTests((async(command:string)=>{if(command==='model_settings')return settings;if(command==='list_local_models')return [];throw new Error('offline')}) as any);
+  await loadModels();
+  expect(state.error).toContain('offline');
+  setInvokeForTests(null);
+ });
+ it('shows the OpenAI API provider tab and preserves saved connection fields when switching',async()=>{
+  state.view='settings';state.error='';state.localModels=[];state.openaiModels=[];state.modelLoading=false;
+  state.modelSettings={provider:'ollama',ollama_url:'http://127.0.0.1:11434',openai_base_url:'https://openrouter.ai/api/v1',openai_api_key:'sk-saved'};
+  setInvokeForTests((async()=>[]) as any);render();
+  const tab=document.querySelector<HTMLElement>('[data-model-provider="openai"]')!;
+  expect(tab.textContent).toContain('OpenAI API');
+  tab.click();
+  expect(state.modelSettings.provider).toBe('openai');
+  expect(state.modelSettings.ollama_url).toBe('http://127.0.0.1:11434');
+  expect(state.modelSettings.openai_base_url).toBe('https://openrouter.ai/api/v1');
+  expect(state.modelSettings.openai_api_key).toBe('sk-saved');
+  setInvokeForTests(null);
+ });
+ it('renders the OpenAI panel, connects with edited inputs, and selects a listed model',async()=>{
+  state.view='settings';state.error='';state.modelLoading=false;
+  state.openaiModels=[{id:'anthropic/claude-sonnet-4',owned_by:'anthropic'},{id:'openai/gpt-4o'}];
+  state.modelSettings={provider:'openai',openai_base_url:'https://openrouter.ai/api/v1',openai_api_key:'sk-saved'};
+  const invoke=vi.fn(async(command:string)=>{if(command==='save_model_settings')return null;if(command==='model_settings')return state.modelSettings;if(command==='list_local_models')return [];if(command==='list_openai_models')return state.openaiModels;throw new Error(command)});
+  setInvokeForTests(invoke as any);render();
+  expect(document.querySelector<HTMLInputElement>('#openai-base-url')?.value).toBe('https://openrouter.ai/api/v1');
+  const keyInput=document.querySelector<HTMLInputElement>('#openai-api-key')!;
+  expect(keyInput.type).toBe('password');expect(keyInput.value).toBe('sk-saved');
+  document.querySelector<HTMLInputElement>('#openai-base-url')!.value='https://api.example.com/v1';
+  keyInput.value='sk-edited';
+  const connect=document.querySelector<HTMLElement>('#refresh-openai')!;
+  expect(connect.textContent).toContain('Connect');
+  connect.click();
+  await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_openai_models',{baseUrl:'https://api.example.com/v1',apiKey:'sk-edited'}));
+  const row=document.querySelector<HTMLElement>('[data-select-openai="anthropic/claude-sonnet-4"]')!;
+  expect(row.classList.contains('model-row')).toBe(true);
+  expect(row.textContent).toContain('OpenAI-compatible API');
+  row.click();
+  await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:expect.objectContaining({provider:'openai',model_id:'anthropic/claude-sonnet-4',openai_base_url:'https://api.example.com/v1',openai_api_key:'sk-edited'})}));
+  setInvokeForTests(null);
+ });
+ it('saves a manually entered OpenAI model id and rejects empty input',async()=>{
+  state.view='settings';state.error='';state.modelLoading=false;state.openaiModels=[];
+  state.modelSettings={provider:'openai',openai_base_url:'https://openrouter.ai/api/v1',openai_api_key:'sk-saved'};
+  const invoke=vi.fn(async(command:string)=>{if(command==='save_model_settings')return null;if(command==='model_settings')return state.modelSettings;if(command==='list_local_models')return [];if(command==='list_openai_models')return [];throw new Error(command)});
+  setInvokeForTests(invoke as any);render();
+  const input=document.querySelector<HTMLInputElement>('#openai-model')!;
+  expect(input.placeholder).toContain('anthropic/claude-sonnet-4');
+  document.querySelector<HTMLElement>('#use-openai-model')!.click();
+  expect(state.error).not.toBe('');
+  expect(invoke).not.toHaveBeenCalledWith('save_model_settings',expect.anything());
+  document.querySelector<HTMLInputElement>('#openai-model')!.value='  openai/gpt-4o-mini  ';
+  document.querySelector<HTMLElement>('#use-openai-model')!.click();
+  await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:expect.objectContaining({provider:'openai',model_id:'openai/gpt-4o-mini',openai_base_url:'https://openrouter.ai/api/v1',openai_api_key:'sk-saved'})}));
+  setInvokeForTests(null);
+ });
+ it('shows an API key hint instead of model rows until a key is saved',()=>{
+  state.view='settings';state.error='';state.modelLoading=false;state.openaiModels=[];
+  state.modelSettings={provider:'openai'};
+  render();
+  expect(document.querySelector('[data-select-openai]')).toBeNull();
+  expect(document.querySelector('.empty-models')?.textContent).toContain('API key');
+ });
+ it('hides the keep-model-loaded toggle for the OpenAI provider',()=>{
+  state.view='settings';state.error='';state.modelLoading=false;state.openaiModels=[];
+  state.modelSettings={provider:'openai',model_id:'openai/gpt-4o',openai_api_key:'sk'};
+  render();
+  expect(document.querySelector('#keep-model-loaded')).toBeNull();
+  state.modelSettings={provider:'huggingface',model_id:'local.gguf'};
+  state.localModels=[{id:'local.gguf',provider:'huggingface',name:'Local',source:'repo',size_bytes:1}];
+  render();
+  expect(document.querySelector('#keep-model-loaded')).not.toBeNull();
+ });
+ it('resolves OpenAI model ids in the status pill',()=>{
+  state.view='settings';state.error='';state.modelLoading=false;
+  state.modelSettings={provider:'openai',model_id:'anthropic/claude-sonnet-4',openai_api_key:'sk'};
+  state.openaiModels=[{id:'anthropic/claude-sonnet-4',owned_by:'anthropic'}];
+  render();
+  expect(document.querySelector('.model-setup-status')?.textContent).toContain('Ready');
+  expect(document.querySelector('.model-setup-status')?.textContent).toContain('anthropic/claude-sonnet-4');
+ });
+ it('checks OpenAI API access with the entered endpoint and key',async()=>{
+  state.modelSettings={provider:'openai',openai_base_url:'https://openrouter.ai/api/v1',openai_api_key:'sk-saved'};state.modelFeedback='';state.error='';
+  const invoke=vi.fn(async(command:string)=>{if(command==='check_openai_access'||command==='save_model_settings')return null;throw new Error(command)});setInvokeForTests(invoke as any);
+  await checkOpenAIAccess('https://api.example.com/v1','sk-test');
+  expect(invoke).toHaveBeenCalledWith('check_openai_access',{baseUrl:'https://api.example.com/v1',apiKey:'sk-test'});
+  expect(invoke).toHaveBeenCalledWith('save_model_settings',{settings:expect.objectContaining({openai_base_url:'https://api.example.com/v1',openai_api_key:'sk-test'})});
+  expect(state.modelFeedback).toContain('Access confirmed');expect(state.error).toBe('');
+  setInvokeForTests(async()=>{throw new Error('401 Unauthorized')});await checkOpenAIAccess();
+  expect(state.error).toContain('401 Unauthorized');setInvokeForTests(null);
+ });
+ it('wires Check access to the edited OpenAI credentials',async()=>{
+  state.view='settings';state.error='';state.modelLoading=false;state.modelSettings={provider:'openai',openai_base_url:'https://openrouter.ai/api/v1',openai_api_key:'sk-saved'};
+  const invoke=vi.fn(async(command:string)=>{if(command==='check_openai_access'||command==='save_model_settings')return null;throw new Error(command)});setInvokeForTests(invoke as any);render();
+  document.querySelector<HTMLInputElement>('#openai-base-url')!.value='https://api.example.com/v1';document.querySelector<HTMLInputElement>('#openai-api-key')!.value='sk-edited';
+  document.querySelector<HTMLElement>('#check-openai-access')!.click();
+  await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('check_openai_access',{baseUrl:'https://api.example.com/v1',apiKey:'sk-edited'}));
+  await vi.waitFor(()=>expect(document.querySelector('.model-feedback')?.textContent).toContain('Access confirmed'));setInvokeForTests(null);
+ });
+ it('opens Quick Add with an OpenAI provider and model selected',()=>{
+  state.boardPath='/board';state.view='board';state.error='';state.quickAddOpen=false;state.selected=null;state.cards=[];
+  state.columns=[{id:'backlog',name:'Backlog'}];
+  state.modelSettings={provider:'openai',model_id:'anthropic/claude-sonnet-4',openai_api_key:'sk'};
+  render();
+  document.querySelector<HTMLElement>('#new-card')!.click();
+  expect(state.quickAddOpen).toBe(true);
+  expect(document.querySelector('#quick-add-form')).not.toBeNull();
+  state.quickAddOpen=false;
  });
 });

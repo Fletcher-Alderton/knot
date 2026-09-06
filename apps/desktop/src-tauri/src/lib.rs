@@ -842,6 +842,32 @@ mod commands {
         model_manager::list_ollama_models(url.as_deref().unwrap_or("http://127.0.0.1:11434")).await
     }
     #[tauri::command]
+    pub async fn list_openai_models(
+        base_url: Option<String>,
+        api_key: Option<String>,
+    ) -> Result<Vec<model_manager::OpenAIModel>, String> {
+        model_manager::list_openai_models(
+            base_url
+                .as_deref()
+                .unwrap_or(model_manager::DEFAULT_OPENAI_BASE_URL),
+            api_key.as_deref(),
+        )
+        .await
+    }
+    #[tauri::command]
+    pub async fn check_openai_access(
+        base_url: Option<String>,
+        api_key: Option<String>,
+    ) -> Result<(), String> {
+        model_manager::check_openai_access(
+            base_url
+                .as_deref()
+                .unwrap_or(model_manager::DEFAULT_OPENAI_BASE_URL),
+            api_key.as_deref(),
+        )
+        .await
+    }
+    #[tauri::command]
     pub async fn parse_quick_add(path: String, text: String) -> Result<ParsedCardDraft, String> {
         if text.trim().is_empty() {
             return Err("quick-add input is empty".into());
@@ -880,6 +906,19 @@ mod commands {
                     &prompt,
                     &schema,
                     settings.keep_model_loaded,
+                )
+                .await?
+            }
+            model_manager::ModelProvider::OpenAI => {
+                model_manager::openai_chat_completion(
+                    settings
+                        .openai_base_url
+                        .as_deref()
+                        .unwrap_or(model_manager::DEFAULT_OPENAI_BASE_URL),
+                    settings.openai_api_key.as_deref(),
+                    &model,
+                    &prompt,
+                    &schema,
                 )
                 .await?
             }
@@ -1483,6 +1522,8 @@ pub fn run() {
             commands::delete_local_model,
             commands::delete_all_local_models,
             commands::list_ollama_models,
+            commands::list_openai_models,
+            commands::check_openai_access,
             commands::search_huggingface_models,
             commands::download_huggingface_gguf,
             commands::parse_quick_add,
