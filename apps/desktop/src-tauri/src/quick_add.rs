@@ -10,12 +10,13 @@ pub fn schema(column_ids: &[String]) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "body", "column", "labels", "due", "start", "confidence", "warnings"],
+        "required": ["title", "body", "column", "labels", "label_colors", "due", "start", "confidence", "warnings"],
         "properties": {
             "title": {"type": "string"},
             "body": {"type": "string"},
             "column": {"type": "string", "enum": column_ids},
             "labels": {"type": "array", "items": {"type": "string"}},
+            "label_colors": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
             "due": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
             "start": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -28,12 +29,13 @@ pub fn compact_schema(column_ids: &[String]) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["t", "b", "c", "l", "d", "s"],
+        "required": ["t", "b", "c", "l", "m", "d", "s"],
         "properties": {
             "t": {"type": "string"},
             "b": {"type": "string"},
             "c": {"type": "string", "enum": column_ids},
             "l": {"type": "array", "items": {"type": "string"}},
+            "m": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
             "d": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
             "s": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
         }
@@ -68,6 +70,7 @@ pub fn expand_minimal(value: &Value) -> Result<Value, String> {
         "body": "",
         "column": "",
         "labels": [],
+        "label_colors": {},
         "due": object.get("d").cloned().unwrap_or(Value::Null),
         "start": object.get("s").cloned().unwrap_or(Value::Null),
         "confidence": 1.0,
@@ -84,6 +87,7 @@ pub fn expand_compact(value: &Value) -> Result<Value, String> {
         "body": object.get("b").cloned().unwrap_or(Value::Null),
         "column": object.get("c").cloned().unwrap_or(Value::Null),
         "labels": object.get("l").cloned().unwrap_or(Value::Null),
+        "label_colors": object.get("m").cloned().unwrap_or(Value::Null),
         "due": object.get("d").cloned().unwrap_or(Value::Null),
         "start": object.get("s").cloned().unwrap_or(Value::Null),
         "confidence": 1.0,
@@ -103,14 +107,16 @@ pub fn compact_prompt(input: &str, columns: &str) -> String {
 }
 
 pub fn compact_prompt_at(
-    input: &str,
-    columns: &str,
-    timestamp: &str,
-    timezone: &str,
-    offset: &str,
+    input: &str, columns: &str, timestamp: &str, timezone: &str, offset: &str,
+) -> String {
+    compact_prompt_at_with_labels(input, columns, "", timestamp, timezone, offset)
+}
+
+pub fn compact_prompt_at_with_labels(
+    input: &str, columns: &str, labels: &str, timestamp: &str, timezone: &str, offset: &str,
 ) -> String {
     format!(
-        "Extract one task as minified JSON only: t=clean title, b=notes or empty, c=column id, l=explicit #labels without #, d=due date, s=start date. Remove metadata (#label, in:, due:, start:) from t; preserve wording and negation; never invent labels or dates. Dates are YYYY-MM-DD or null. Default to the first column. Current time {timestamp} ({timezone}, UTC {offset}). Next weekday is strictly upcoming; next week is Monday; yearless date is next occurrence; vague dates are null. Columns: {columns}. Input: {input}"
+        "Extract one task as minified JSON only: t=clean title, b=notes or empty, c=column id, l=labels without #, m=label-to-hex-color map, d=due date, s=start date. Remove metadata (#label, in:, due:, start:) from t; preserve wording and negation. Reuse an available board label when appropriate; create a label/color only when explicitly requested. Markdown links in notes/body are allowed and must be preserved. Dates are YYYY-MM-DD or null. Default to the first column. Current time {timestamp} ({timezone}, UTC {offset}). Next weekday is strictly upcoming; next week is Monday; yearless date is next occurrence; vague dates are null. Columns: {columns}. Available labels and colors: {labels}. Input: {input}"
     )
 }
 
@@ -267,6 +273,10 @@ pub fn prompt_at(
     )
 }
 
+fn valid_label_color(color: &str) -> bool {
+    color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 pub fn validate_output(value: &Value, column_ids: &[String]) -> Result<(), String> {
     let object = value
         .as_object()
@@ -276,6 +286,7 @@ pub fn validate_output(value: &Value, column_ids: &[String]) -> Result<(), Strin
         "body",
         "column",
         "labels",
+        "label_colors",
         "due",
         "start",
         "confidence",
@@ -291,6 +302,9 @@ pub fn validate_output(value: &Value, column_ids: &[String]) -> Result<(), Strin
         || !object["labels"]
             .as_array()
             .is_some_and(|a| a.iter().all(Value::is_string))
+        || !object["label_colors"]
+            .as_object()
+            .is_some_and(|m| m.iter().all(|(label, color)| !label.is_empty() && color.as_str().is_some_and(valid_label_color)))
         || !object["warnings"]
             .as_array()
             .is_some_and(|a| a.iter().all(Value::is_string))
@@ -332,6 +346,7 @@ pub fn require_fields(value: &Value) -> Result<(), String> {
         "body",
         "column",
         "labels",
+        "label_colors",
         "due",
         "start",
         "confidence",
@@ -371,7 +386,7 @@ mod tests {
         let grammar = llama_cpp_2::json_schema_to_grammar(&compact.to_string()).unwrap();
         assert!(grammar.contains("root ::="));
         let expanded = expand_compact(&json!({
-            "t": "Call Sam", "b": "", "c": "todo", "l": [], "d": null, "s": null
+            "t": "Call Sam", "b": "", "c": "todo", "l": [], "m": {}, "d": null, "s": null
         }))
         .unwrap();
         assert!(validate_output(&expanded, &["todo".into()]).is_ok());
@@ -410,8 +425,17 @@ mod tests {
     }
 
     #[test]
+    fn compact_prompt_includes_available_label_colors() {
+        let p = compact_prompt_at_with_labels(
+            "fix bug", "todo=Todo", "urgent=#ff0000, normal=#00ff00",
+            "2026-09-05T00:00:00+00:00", "UTC", "+00:00",
+        );
+        assert!(p.contains("Available labels and colors: urgent=#ff0000, normal=#00ff00"));
+    }
+
+    #[test]
     fn validates_exact_fields_dates_and_column_values() {
-        let valid = json!({"title":"Call Sam","body":"","column":"todo","labels":[],
+        let valid = json!({"title":"Call Sam","body":"","column":"todo","labels":[],"label_colors":{},
             "due":"2026-09-06","start":null,"confidence":0.9,"warnings":[]});
         let columns = vec!["todo".to_string()];
         assert!(validate_output(&valid, &columns).is_ok());

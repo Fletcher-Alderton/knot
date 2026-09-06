@@ -126,6 +126,23 @@ impl CardFrontmatter {
         validate_frontmatter(&fm)?;
         Ok(fm)
     }
+    /// Read arbitrary CSS color values keyed by label name.
+    pub fn label_colors(&self) -> BTreeMap<String, String> {
+        self.extra
+            .get("label_colors")
+            .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// Store an arbitrary CSS color for a label in YAML extension metadata.
+    pub fn set_label_color(&mut self, label: impl Into<String>, color: impl Into<String>) {
+        let mut colors = self.label_colors();
+        colors.insert(label.into(), color.into());
+        if let Ok(value) = serde_yaml::to_value(colors) {
+            self.extra.insert("label_colors".into(), value);
+        }
+    }
+
     pub fn to_yaml(&self) -> Result<String> {
         validate_frontmatter(self)?;
         serde_yaml::to_string(self).map_err(|e| ParseError::MalformedYaml(e.to_string()))
@@ -198,6 +215,26 @@ impl Board {
     }
 }
 
+/// Extract Markdown links from a card body as `(label, destination)` pairs.
+/// Links are deliberately stored in the Markdown body rather than duplicated in YAML.
+pub fn markdown_links(body: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = body;
+    while let Some(open) = rest.find("[") {
+        let after_open = &rest[open + 1..];
+        let Some(close_rel) = after_open.find("](") else { break };
+        let label = &after_open[..close_rel];
+        let after_dest = &after_open[close_rel + 2..];
+        let Some(end) = after_dest.find(")") else { break };
+        let destination = &after_dest[..end];
+        if !label.is_empty() && !destination.is_empty() {
+            out.push((label.to_owned(), destination.to_owned()));
+        }
+        rest = &after_dest[end + 1..];
+    }
+    out
+}
+
 /// SHA-256 of normalized Markdown content, prefixed for unambiguous storage.
 pub fn canonical_content_hash(content: &str) -> String {
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
@@ -234,6 +271,20 @@ mod tests {
             Card::parse("---\nid: [\n---\nx"),
             Err(ParseError::MalformedYaml(_))
         ));
+    }
+    #[test]
+    fn label_colors_roundtrip_as_arbitrary_css() {
+        let mut fm = CardFrontmatter { id: ID.into(), title: "x".into(), column: "todo".into(), position: 1, ..Default::default() };
+        fm.set_label_color("urgent", "color-mix(in srgb, red 40%, #123456)");
+        let parsed = CardFrontmatter::parse(&fm.to_yaml().unwrap()).unwrap();
+        assert_eq!(parsed.label_colors()["urgent"], "color-mix(in srgb, red 40%, #123456)");
+    }
+    #[test]
+    fn markdown_links_are_extracted_from_body() {
+        assert_eq!(markdown_links("See [issue](https://example.test/a) and [docs](/docs)."), vec![
+            ("issue".into(), "https://example.test/a".into()),
+            ("docs".into(), "/docs".into()),
+        ]);
     }
     #[test]
     fn hash_is_stable() {

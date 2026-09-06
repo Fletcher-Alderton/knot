@@ -12,7 +12,7 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -36,6 +36,7 @@ pub struct BoardInfo {
     pub board_id: String,
     pub title: String,
     pub columns: Vec<BoardColumn>,
+    pub labels: BTreeMap<String, String>,
     pub cards: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,9 @@ pub struct CardInfo {
     pub column: String,
     pub position: i64,
     pub labels: Vec<String>,
+    pub label_colors: std::collections::BTreeMap<String, String>,
+    pub due: Option<String>,
+    pub start: Option<String>,
     pub updated_at: Option<String>,
     pub revision: Option<String>,
 }
@@ -68,6 +72,8 @@ pub struct ParsedCardDraft {
     pub column: String,
     #[serde(deserialize_with = "deserialize_null_default")]
     pub labels: Vec<String>,
+    #[serde(deserialize_with = "deserialize_null_default")]
+    pub label_colors: BTreeMap<String, String>,
     pub due: Option<String>,
     pub start: Option<String>,
     #[serde(deserialize_with = "deserialize_null_default")]
@@ -185,6 +191,8 @@ pub struct CardInput {
     pub column: String,
     #[serde(default)]
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub label_colors: std::collections::BTreeMap<String, String>,
     pub position: Option<i64>,
     #[serde(default)]
     pub due: Option<String>,
@@ -394,6 +402,7 @@ fn inspect(path: String) -> Result<BoardInfo, String> {
             .unwrap_or("My board")
             .into(),
         columns,
+        labels: b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(),
         cards: s.list_cards().map_err(|e| e.to_string())?,
     })
 }
@@ -423,13 +432,17 @@ fn slug(name: &str) -> String {
 }
 fn card_info(id: String, markdown: &str) -> Result<CardInfo, String> {
     let c = Card::parse(markdown).map_err(|e| e.to_string())?;
+    let label_colors = c.frontmatter.label_colors();
     Ok(CardInfo {
         id,
         title: c.frontmatter.title,
         body: c.body,
         column: c.frontmatter.column,
         position: c.frontmatter.position,
+        label_colors,
         labels: c.frontmatter.labels,
+        due: c.frontmatter.due,
+        start: c.frontmatter.extra.get("start").and_then(|v| v.as_str()).map(str::to_owned),
         updated_at: c
             .frontmatter
             .sync
@@ -644,6 +657,9 @@ fn with_mutation(path: &str, id: &str, input: CardInput) -> Result<CardInfo, Str
     fm.column = input.column;
     fm.position = input.position.unwrap_or(fm.position);
     fm.labels = input.labels;
+    if !input.label_colors.is_empty() {
+        fm.extra.insert("label_colors".into(), serde_yaml::to_value(input.label_colors).map_err(|e| e.to_string())?);
+    }
     if let Some(due) = input.due {
         fm.due = Some(due);
     }
@@ -894,7 +910,21 @@ mod commands {
             .collect::<Vec<_>>();
         let hints = quick_add::deterministic_hints(&text, &column_pairs);
         let schema = quick_add::compact_schema(&column_ids);
-        let prompt = quick_add::compact_prompt(&hints.model_input, &columns);
+        let labels = info
+            .labels
+            .iter()
+            .map(|(name, color)| format!("{name}={color}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let now = chrono::Local::now();
+        let prompt = quick_add::compact_prompt_at_with_labels(
+            &hints.model_input,
+            &columns,
+            &labels,
+            &now.to_rfc3339(),
+            &quick_add::timezone_name(),
+            &now.format("%:z").to_string(),
+        );
         let raw = match provider {
             model_manager::ModelProvider::Ollama => {
                 model_manager::ollama_generate(
@@ -1138,6 +1168,22 @@ title: My board
         })
     }
     #[tauri::command]
+    pub fn create_label(path: String, name: String, color: String) -> Result<BoardInfo, String> {
+        let name=name.trim().to_string(); let color=color.trim().to_string();
+        if name.is_empty() || name.len()>80 || color.is_empty() || color.len()>200 || color.chars().any(|c| matches!(c, '<'|'>'|';'|'\"')) { return Err("invalid label name or color".into()); }
+        save_board_metadata(&path, |b| { let mut labels: BTreeMap<String,String> = b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(); if labels.contains_key(&name) { return Err("label already exists".into()); } labels.insert(name.clone(),color.clone()); b.metadata.insert("labels".into(),serde_yaml::to_value(labels).map_err(|e|e.to_string())?); Ok(()) })
+    }
+    #[tauri::command]
+    pub fn update_label(path: String, name: String, new_name: String, color: String) -> Result<BoardInfo, String> {
+        let name=name.trim().to_string(); let new_name=new_name.trim().to_string(); let color=color.trim().to_string();
+        if name.is_empty() || new_name.is_empty() || new_name.len()>80 || color.is_empty() || color.len()>200 || color.contains(['<','>',';','\"']) { return Err("invalid label name or color".into()); }
+        save_board_metadata(&path, |b| { let mut labels: BTreeMap<String,String> = b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(); if !labels.contains_key(&name) { return Err("label not found".into()); } if name != new_name && labels.contains_key(&new_name) { return Err("label already exists".into()); } labels.remove(&name); labels.insert(new_name.clone(),color.clone()); b.metadata.insert("labels".into(),serde_yaml::to_value(labels).map_err(|e|e.to_string())?); Ok(()) })
+    }
+    #[tauri::command]
+    pub fn delete_label(path: String, name: String) -> Result<BoardInfo, String> {
+        save_board_metadata(&path, |b| { let mut labels: BTreeMap<String,String> = b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(); labels.remove(name.trim()).ok_or_else(|| "label not found".to_string())?; b.metadata.insert("labels".into(),serde_yaml::to_value(labels).map_err(|e|e.to_string())?); Ok(()) })
+    }
+    #[tauri::command]
     pub fn create_column(path: String, name: String) -> Result<BoardInfo, String> {
         if name.trim().is_empty() {
             return Err("column name must be nonempty".into());
@@ -1232,6 +1278,14 @@ title: My board
         fm.column = selected.column;
         fm.position = selected.position.unwrap_or(fm.position);
         fm.labels = selected.labels;
+        if !selected.label_colors.is_empty() {
+            fm.extra.insert("label_colors".into(), serde_yaml::to_value(selected.label_colors).map_err(|e| e.to_string())?);
+        }
+        fm.due = selected.due;
+        fm.extra.remove("start");
+        if let Some(start) = selected.start {
+            fm.extra.insert("start".into(), serde_yaml::Value::String(start));
+        }
         let revision_id = revision();
         fm.sync = Some(SyncMetadata {
             revision: Some(revision_id.clone()),
@@ -1276,12 +1330,27 @@ title: My board
                 body: old.body,
                 column,
                 labels: old.labels,
+                label_colors: old.label_colors,
                 position,
-                due: None,
-                start: None,
+                due: old.due,
+                start: old.start,
             },
         )
     }
+    /// Return a stable POSIX root-relative path suitable for sharing, never an OS path.
+    #[tauri::command]
+    pub fn share_path(path: String, id: String) -> Result<String, String> {
+        if !kanban_core::validate_ulid(&id) {
+            return Err("card id must be a valid ULID".into());
+        }
+        let root = Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
+        let card = root.join("cards").join(format!("{id}.md"));
+        if !card.is_file() {
+            return Err("card not found".into());
+        }
+        Ok(format!("/cards/{id}.md"))
+    }
+
     #[tauri::command]
     pub fn delete_card(path: String, id: String) -> Result<bool, String> {
         let mut s = board(&path)?;
@@ -1501,11 +1570,15 @@ pub fn run() {
             commands::rename_column,
             commands::reorder_columns,
             commands::create_column,
+            commands::create_label,
+            commands::update_label,
+            commands::delete_label,
             commands::list_cards,
             commands::read_card,
             commands::add_card,
             commands::update_card,
             commands::resolve_conflict,
+            commands::share_path,
             commands::delete_card,
             commands::move_card,
             commands::watch_board,
@@ -1699,6 +1772,7 @@ body";
                 body: "B".into(),
                 column: "backlog".into(),
                 labels: vec![],
+                label_colors: Default::default(),
                 position: None,
                 due: Some("2026-09-12".into()),
                 start: Some("2026-09-10".into()),
@@ -1730,6 +1804,7 @@ body";
                 body: "B2".into(),
                 column: "done".into(),
                 labels: vec![],
+                label_colors: Default::default(),
                 position: None,
                 due: None,
                 start: None,
@@ -1766,6 +1841,7 @@ body";
                 body: "base".into(),
                 column: "backlog".into(),
                 labels: vec![],
+                label_colors: Default::default(),
                 position: Some(1),
                 due: None,
                 start: None,
@@ -1790,6 +1866,7 @@ body";
                     body: "l".into(),
                     column: "backlog".into(),
                     labels: vec![],
+                    label_colors: Default::default(),
                     position: Some(1),
                     due: None,
                     start: None,
@@ -1799,6 +1876,7 @@ body";
                     body: "r".into(),
                     column: "done".into(),
                     labels: vec![],
+                    label_colors: Default::default(),
                     position: Some(2),
                     due: None,
                     start: None,
@@ -1808,6 +1886,7 @@ body";
                     body: "merged body".into(),
                     column: "doing".into(),
                     labels: vec!["merged".into()],
+                    label_colors: Default::default(),
                     position: Some(3),
                     due: None,
                     start: None,
@@ -1821,6 +1900,16 @@ body";
         let persisted: Revision = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(persisted.parents, vec![first, second]);
         assert_eq!(resolved.title, "merged");
+        let _ = fs::remove_dir_all(p);
+    }
+    #[test]
+    fn share_path_is_posix_root_relative_and_safe() {
+        let p = std::env::temp_dir().join(format!("luna-share-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        create_board(p.to_string_lossy().into_owned()).unwrap();
+        let card = add_card(p.to_string_lossy().into_owned(), CardInput { title: "x".into(), body: "".into(), column: "backlog".into(), labels: vec![], label_colors: Default::default(), position: Some(1), due: None, start: None }).unwrap();
+        let expected = format!("/cards/{}.md", card.id);
+        assert_eq!(share_path(p.to_string_lossy().into_owned(), card.id).unwrap(), expected);
         let _ = fs::remove_dir_all(p);
     }
     #[test]

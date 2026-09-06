@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess } from './main';
+import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath } from './main';
 
 describe('Kanban UI',()=>{
+ it('renders Markdown safely and preserves only safe links',()=>{const html=renderMarkdown('[docs](https://example.com) [bad](javascript:alert(1)) <script>alert(1)</script>');expect(html).toContain('href="https://example.com"');expect(html).not.toContain('javascript:');expect(html).not.toContain('<script>');});
+ it('shares POSIX root-relative card paths',()=>{expect(sharePath('\\Users\\me\\board\\card.md')).toBe('/Users/me/board/card.md');expect(sharePath('/Users/me/board/card.md','/Users/me')).toBe('/board/card.md');expect(shareCardPath('/Users/me/board','abc')).toBe('/cards/abc.md');});
  it('escapes card content before rendering',()=>expect(renderCardText('<script>')).toBe('&lt;script&gt;'));
  it('normalizes backend card payloads',()=>expect(normalize({id:'a',title:'A',body:'B',column:'doing',labels:['x'],updated_at:'2024-01-01T00:00:00Z'})).toMatchObject({id:'a',column:'doing',labels:['x'],updatedAt:1704067200000}));
  it('keeps conflict choices explicit',()=>expect(['local','remote','manual']).toHaveLength(3));
@@ -15,7 +17,14 @@ describe('Kanban UI',()=>{
    expect(state.error).toContain('disk unavailable'); setInvokeForTests(null);
  });
  it('hydrates the stable board identity without using its path as identity',()=>{applyBoardInfo({path:'/private/local/path',board_id:'01BOARDULID',cards:[]});expect(state.boardId).toBe('01BOARDULID');expect(state.boardId).not.toBe(state.boardPath)});
- it('pairs a serialized endpoint address for the current board',async()=>{
+ it('hydrates board labels and exposes color CRUD in Settings',async()=>{state.boardPath='/board';state.view='settings';applyBoardInfo({path:'/board',board_id:'labels-board',title:'Board',columns:[],labels:{urgent:'#ef4444'},cards:[]});expect(state.labelColors.urgent).toBe('#ef4444');render();expect(document.querySelector('[data-settings-section=labels]')).not.toBeNull();const info={path:'/board',board_id:'labels-board',title:'Board',columns:[],labels:{urgent:'#ef4444',later:'#22c55e'},cards:[]};const invoke=vi.fn(async(command:string)=>command==='create_label'?info:command==='update_label'?{...info,labels:{soon:'#3b82f6'}}:{...info,labels:{}});setInvokeForTests(invoke as any);document.querySelector<HTMLInputElement>('#new-label-name')!.value='later';document.querySelector<HTMLFormElement>('#create-label-form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('create_label',{path:'/board',name:'later',color:'#8b5cf6'}));await updateLabel('urgent','soon','#3b82f6');await deleteLabel('soon');expect(invoke).toHaveBeenCalledWith('update_label',{path:'/board',name:'urgent',newName:'soon',color:'#3b82f6'});expect(invoke).toHaveBeenCalledWith('delete_label',{path:'/board',name:'soon'});setInvokeForTests(null);});
+it('selects board labels with a multi-select and preserves them in the save payload',async()=>{
+   state.boardPath='/board';state.view='board';state.labels={urgent:'#ef4444',later:'#22c55e'};state.labelColors={...state.labels};state.columns=[{id:'todo',name:'Todo'}];state.cards=[{id:'card-1',title:'Card',body:'',column:'todo',labels:['urgent'],updatedAt:0}];state.selected='card-1';
+   const invoke=vi.fn(async(command:string)=>{if(command==='update_card')return {id:'card-1',title:'Card',body:'',column:'todo',labels:['urgent','later']};throw new Error(command)});setInvokeForTests(invoke as any);render();
+   const select=document.querySelector<HTMLSelectElement>('#labels')!;expect(select.multiple).toBe(true);expect(Array.from(select.options).map(option=>option.value)).toEqual(['urgent','later']);expect(select.options[0].selected).toBe(true);select.options[1].selected=true;document.querySelector<HTMLElement>('#save')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('update_card',{path:'/board',id:'card-1',input:expect.objectContaining({labels:['urgent','later'],label_colors:{urgent:'#ef4444',later:'#22c55e'}})}));setInvokeForTests(null);
+ });
+it('pairs a serialized endpoint address for the current board',async()=>{
    state.boardPath='/board';state.boardId='01BOARDULID'; const address=JSON.stringify({id:'peer-1',addrs:['relay']});
    const invoke=vi.fn(async(command:string)=>{if(command==='pair_peer_address')return {peer_id:'peer-1',trusted:true};if(command==='sync_status')return {connected:true,trusted_peers:1,connection:'connected'};if(command==='endpoint_info')return {endpoint_id:'local',address:'local-address'};if(command==='list_trusted_peers')return [{peer_id:'peer-1',trusted:true}];throw new Error(command)});
    setInvokeForTests(invoke as any); await pairAddress(address);

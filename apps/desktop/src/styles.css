@@ -175,7 +175,7 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 .card h3 { margin: 1px 0 6px; font-size: 14px; line-height: 1.35; font-weight: 600; letter-spacing: -.01em; }
 .card p { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; white-space: pre-wrap; }
 .card-foot { display: flex; gap: 5px; flex-wrap: wrap; }
-.tag { padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: color-mix(in srgb, var(--accent) 74%, var(--text)); font-size: 10px; font-weight: 500; }
+.tag { padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--label-color, var(--accent)) 22%, transparent); color: color-mix(in srgb, var(--label-color, var(--accent)) 74%, var(--text)); font-size: 10px; font-weight: 500; }
 
 .settings-toggle { position: fixed; left: 20px; bottom: 20px; z-index: 4; width: 42px; height: 42px; border: 1px solid var(--border-strong); border-radius: 50%; background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--text); box-shadow: var(--shadow-tactile); backdrop-filter: blur(14px); font-size: 17px; transition: transform 320ms var(--motion), background 160ms ease, box-shadow 160ms ease; }
 .settings-toggle:hover, .settings-toggle.active { transform: translateY(-2px) rotate(8deg); background: var(--surface); box-shadow: 0 10px 24px -10px rgba(0,0,0,.3); }
@@ -190,6 +190,16 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 .settings-header p { margin: 0; color: var(--text-muted); font-size: 14px; }
 .eyebrow { color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: .13em; }
 .settings-layout { display: grid; gap: 18px; }
+.label-create { display: grid; grid-template-columns: 1fr auto auto; align-items: end; gap: 10px; padding: 0 26px 18px; }
+.label-create label, .label-row label { color: var(--text-muted); font-size: 11px; }
+.label-create input:not([type=color]), .label-row input:not([type=color]) { display: block; width: 100%; min-height: 36px; margin-top: 5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-muted); color: var(--text); }
+.label-create input:focus, .label-row input:focus { border-color: var(--border-strong); background: var(--surface); }
+.label-create input[type=color], .label-row input[type=color] { width: 42px; height: 36px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-muted); cursor: pointer; }
+.label-create button { white-space: nowrap; }
+.label-list { display: grid; gap: 8px; padding: 0 26px 26px; }
+.label-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-muted); }
+.label-row button { min-height: 36px; white-space: nowrap; }
+@media (max-width: 620px) { .label-create { grid-template-columns: 1fr auto; } .label-create button { grid-column: 1 / -1; } .label-row { grid-template-columns: minmax(0, 1fr) auto; } .label-row button { width: 100%; } }
 .settings-section { overflow: hidden; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-tactile); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 24px 26px 20px; }
 .section-heading h2 { margin: 3px 0 5px; font-size: 21px; letter-spacing: -.025em; }
