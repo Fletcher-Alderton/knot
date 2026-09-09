@@ -307,7 +307,7 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
   border: 1px solid var(--border-strong);
   border-radius: 18px;
   box-shadow: 0 22px 80px rgba(0,0,0,.24), 0 3px 14px rgba(0,0,0,.08);
-  overflow: visible;
+  overflow: hidden;
   animation: modal-in 260ms var(--motion) both;
 }
 .ce-header { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; padding: 14px 16px 12px 18px; }
