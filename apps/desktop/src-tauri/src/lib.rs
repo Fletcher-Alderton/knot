@@ -255,6 +255,7 @@ struct Runtime {
     boards: HashMap<String, FsBoardStore>,
     events: VecDeque<WatchEvent>,
     watchers: Vec<RecommendedWatcher>,
+    watched_paths: std::collections::HashSet<String>,
     peers: std::collections::HashSet<String>,
     self_hashes: HashMap<String, String>,
     /// Last known revision per board/card, used to parent watcher tombstones.
@@ -274,6 +275,7 @@ fn runtime() -> &'static Mutex<Runtime> {
             boards: HashMap::new(),
             events: VecDeque::new(),
             watchers: Vec::new(),
+            watched_paths: std::collections::HashSet::new(),
             peers,
             self_hashes: HashMap::new(),
             last_revisions: HashMap::new(),
@@ -539,19 +541,20 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
                         .to_string_lossy()
                         .into_owned();
                     let self_write = {
-                        let mut r = runtime().lock().unwrap();
-                        if r.self_hashes
+                        let r = runtime().lock().unwrap();
+                        // Keep the hash for the whole notify burst. A single
+                        // local write can produce more than one modify event.
+                        r.self_hashes
                             .get(&event_key)
                             .map(|h| h == &hash)
                             .unwrap_or(false)
-                        {
-                            r.self_hashes.remove(&event_key);
-                            true
-                        } else {
-                            false
-                        }
                     };
-                    if !self_write && !duplicate {
+                    // The UI already has the result of a local mutation. Do not
+                    // echo that filesystem event back as an external change.
+                    if self_write {
+                        return;
+                    }
+                    if !duplicate {
                         let old =
                             fs::read_to_string(root.join("cards").join(format!("{id}.md"))).ok();
                         let parents = old
@@ -584,13 +587,6 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
     {
         let self_delete = runtime().lock().unwrap().self_deletes.remove(&path_string);
         if self_delete {
-            runtime().lock().unwrap().events.push_back(WatchEvent {
-                path: path_string,
-                kind: format!("{kind:?}"),
-                valid: true,
-                duplicate: false,
-                error: None,
-            });
             return;
         }
         let parent = runtime()
@@ -1395,6 +1391,17 @@ title: My board
         let root = PathBuf::from(&path);
         if !root.is_dir() {
             return Err("board folder does not exist".into());
+        }
+        let watch_key = root
+            .canonicalize()
+            .unwrap_or_else(|_| root.clone())
+            .to_string_lossy()
+            .into_owned();
+        {
+            let mut r = runtime().lock().unwrap();
+            if !r.watched_paths.insert(watch_key) {
+                return Ok(true);
+            }
         }
         let event_root = root.clone();
         let callback_root = event_root.clone();

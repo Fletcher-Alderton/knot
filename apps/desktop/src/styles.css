@@ -185,6 +185,11 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 .notice, .error { padding: 10px 13px; border-radius: var(--radius-s); font-size: 13px; }
 .notice { background: var(--surface-muted); color: var(--text-muted); }
 .error { background: color-mix(in srgb, var(--red) 12%, var(--surface)); color: color-mix(in srgb, var(--red) 76%, var(--text)); border: 1px solid color-mix(in srgb, var(--red) 32%, var(--border)); }
+.toast { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: flex; align-items: flex-start; gap: 14px; width: min(380px, calc(100vw - 32px)); padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--red) 32%, var(--border)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--red) 12%, var(--surface)); color: color-mix(in srgb, var(--red) 76%, var(--text)); box-shadow: var(--shadow-float); font-size: 13px; line-height: 1.4; animation: toast-in 220ms var(--motion); }
+.toast span { flex: 1; min-width: 0; }
+.toast-dismiss { flex: 0 0 auto; width: 22px; height: 22px; margin: -2px -3px 0 0; border-radius: 50%; color: inherit; font-size: 20px; line-height: 18px; opacity: .7; }
+.toast-dismiss:hover, .toast-dismiss:focus-visible { background: color-mix(in srgb, currentColor 12%, transparent); opacity: 1; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
 
 .settings { width: min(920px,100%); max-width: 920px; margin-inline: auto; }
 .settings-header { margin-bottom: 30px; }
@@ -411,6 +416,7 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
   .device-details { margin-inline: 20px; }
   .device-grid { grid-template-columns: 1fr; }
   .settings-toggle { left: 14px; bottom: 14px; }
+  .toast { right: 14px; bottom: 14px; }
 }
 
 @media (max-width: 520px) {
