@@ -127,6 +127,7 @@ main { min-height: 100vh; background: var(--bg); }
 .column-title .inline-title-input { width: 190px; font-size: 13px; font-weight: 600; }
 
 .create-actions { display: flex; align-items: stretch; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-tactile); }
+.utility-actions { position: fixed; left: 24px; bottom: 24px; z-index: 20; display: flex; align-items: stretch; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-m); background: var(--surface); box-shadow: var(--shadow-tactile); }
 .reveal-action { --expanded-width: 112px; width: 38px; height: 38px; padding: 0 10px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; overflow: hidden; white-space: nowrap; transition: width 320ms var(--motion), background-color 160ms ease, color 160ms ease, transform 160ms var(--motion); }
 .reveal-action .action-label { max-width: 0; opacity: 0; overflow: hidden; transform: translateX(8px); transition: max-width 320ms var(--motion), opacity 160ms ease, transform 320ms var(--motion); }
 .reveal-action:hover, .reveal-action:focus-visible { width: var(--expanded-width); }
@@ -138,9 +139,30 @@ main { min-height: 100vh; background: var(--bg); }
 .create-actions .card-action:hover, .create-actions .card-action:focus-visible { background: #373737; }
 .create-actions .column-action:hover, .create-actions .column-action:focus-visible { background: #cbbb98; }
 .create-actions .reveal-action:hover .action-label, .create-actions .reveal-action:focus-visible .action-label { max-width: 108px; }
+.utility-actions .utility-action { position: static; left: auto; bottom: auto; z-index: auto; width: 38px; height: 38px; border: 0; border-radius: 0; box-shadow: none; }
+.utility-actions .archive-action { --expanded-width: 142px; color: #292722; background: var(--accent); }
+.utility-actions .settings-action { --expanded-width: 112px; color: #f7f4ed; background: #252525; }
+.utility-actions .archive-action:hover, .utility-actions .archive-action:focus-visible { background: #cbbb98; }
+.utility-actions .settings-action:hover, .utility-actions .settings-action:focus-visible { background: #373737; }
+.utility-actions .utility-action + .utility-action { border-left: 1px solid color-mix(in srgb, white 26%, transparent); }
+.utility-actions .utility-action:hover, .utility-actions .utility-action:focus-visible { width: var(--expanded-width); }
+.utility-actions .utility-action:hover .action-label, .utility-actions .utility-action:focus-visible .action-label { max-width: 108px; }
+.utility-actions .utility-action .plus-icon { display: grid; place-items: center; width: 18px; height: 18px; }
+.utility-actions .utility-action .plus-icon svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .icon-only { width: 32px; padding-inline: 0; display: grid; place-items: center; }
 
 .columns { display: flex; align-items: flex-start; gap: 16px; min-width: max-content; }
+.archived-section { max-width: 980px; margin-top: 24px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-tactile); }
+.archived-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.archived-heading h2 { margin: 3px 0 4px; font-size: 18px; letter-spacing: -.02em; }
+.archived-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.archived-count { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 8px; border-radius: 999px; background: var(--surface-muted); color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.archived-list { display: grid; gap: 8px; }
+.archived-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-muted); }
+.archived-card h3 { margin: 0 0 4px; font-size: 13px; }
+.archived-card p { margin: 0 0 5px; color: var(--text-muted); font-size: 12px; white-space: pre-wrap; }
+.archived-card small { color: var(--text-faint); font-size: 11px; }
+.archived-card .secondary { flex: 0 0 auto; }
 body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *, body:has(.column-dragging) * { -webkit-user-select: none !important; user-select: none !important; }
 .column {
   width: 310px;
@@ -181,6 +203,7 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 
 .settings-toggle { position: fixed; left: 20px; bottom: 20px; z-index: 4; width: 42px; height: 42px; border: 1px solid var(--border-strong); border-radius: 50%; background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--text); box-shadow: var(--shadow-tactile); backdrop-filter: blur(14px); font-size: 17px; transition: transform 320ms var(--motion), background 160ms ease, box-shadow 160ms ease; }
 .settings-toggle:hover, .settings-toggle.active { transform: translateY(-2px) rotate(8deg); background: var(--surface); box-shadow: 0 10px 24px -10px rgba(0,0,0,.3); }
+.utility-actions .settings-toggle:hover, .utility-actions .settings-toggle.active { transform: none; box-shadow: none; }
 
 .notice, .error { padding: 10px 13px; border-radius: var(--radius-s); font-size: 13px; }
 .notice { background: var(--surface-muted); color: var(--text-muted); }
@@ -415,8 +438,15 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
   .sync-actions > div { grid-column: 1 / -1; }
   .device-details { margin-inline: 20px; }
   .device-grid { grid-template-columns: 1fr; }
-  .settings-toggle { left: 14px; bottom: 14px; }
+  .settings-toggle { left: auto; bottom: auto; }
+  .utility-actions { left: 14px; bottom: 14px; }
   .toast { right: 14px; bottom: 14px; }
+  .archived-section { max-width: none; }
+}
+
+@media (max-width: 520px) {
+  .archived-card { align-items: stretch; flex-direction: column; gap: 10px; }
+  .archived-card .secondary { width: 100%; }
 }
 
 @media (max-width: 520px) {

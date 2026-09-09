@@ -53,6 +53,12 @@ pub struct CardInfo {
     pub updated_at: Option<String>,
     pub revision: Option<String>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivedCard {
+    pub card: CardInfo,
+    pub revision_id: String,
+    pub archived_at: u64,
+}
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -469,6 +475,41 @@ fn persist_revision(root: &Path, r: &Revision) -> Result<(), String> {
     }
     Ok(())
 }
+fn load_revisions(path: &str) -> Result<Vec<Revision>, String> {
+    let directory = Path::new(path).join(".kanban/revisions");
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let revisions = fs::read_dir(directory)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|x| x.to_str()) == Some("json"))
+        .filter_map(|entry| fs::read(entry.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Revision>(&bytes).ok())
+        .collect();
+    Ok(revisions)
+}
+fn archived_cards(path: &str) -> Result<Vec<ArchivedCard>, String> {
+    let revisions = load_revisions(path)?;
+    let parents: std::collections::HashSet<String> = revisions.iter().flat_map(|r| r.parents.iter().cloned()).collect();
+    let by_id: HashMap<String, Revision> = revisions.into_iter().map(|r| (r.revision_id.clone(), r)).collect();
+    let mut result = Vec::new();
+    for revision in by_id.values().filter(|r| r.tombstone && !parents.contains(&r.revision_id)) {
+        let mut pending = revision.parents.clone();
+        let mut snapshot = None;
+        while let Some(parent) = pending.pop() {
+            if let Some(candidate) = by_id.get(&parent) {
+                if candidate.tombstone { pending.extend(candidate.parents.clone()); }
+                else if candidate.snapshot.is_some() { snapshot = Some(candidate); break; }
+            }
+        }
+        let Some(snapshot) = snapshot else { continue };
+        let card = card_info(revision.card_id.clone(), snapshot.snapshot.as_deref().unwrap())?;
+        result.push(ArchivedCard { card, revision_id: revision.revision_id.clone(), archived_at: revision.timestamp });
+    }
+    result.sort_by(|a, b| b.archived_at.cmp(&a.archived_at).then_with(|| a.card.title.cmp(&b.card.title)));
+    Ok(result)
+}
 fn content_hash(text: &str) -> String {
     let mut h = Sha256::new();
     h.update(text.replace("\r\n", "\n").replace('\r', "\n").as_bytes());
@@ -618,7 +659,7 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
     });
 }
 
-fn with_mutation(path: &str, id: &str, input: CardInput) -> Result<CardInfo, String> {
+fn with_mutation(path: &str, id: &str, input: CardInput, parent_override: Option<Vec<String>>) -> Result<CardInfo, String> {
     for (name, value) in [
         ("due", input.due.as_deref()),
         ("start", input.start.as_deref()),
@@ -647,7 +688,7 @@ fn with_mutation(path: &str, id: &str, input: CardInput) -> Result<CardInfo, Str
             activity: vec![],
             extra: Default::default(),
         });
-    let parent = fm.sync.as_ref().and_then(|x| x.revision.clone());
+    let parent = parent_override.unwrap_or_else(|| fm.sync.as_ref().and_then(|x| x.revision.clone()).into_iter().collect());
     let rid = revision();
     fm.title = input.title;
     fm.column = input.column;
@@ -967,6 +1008,20 @@ mod commands {
         let compact: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|error| format!("model returned invalid Quick Add JSON: {error}"))?;
         let mut expanded = quick_add::expand_compact(&compact)?;
+        let model_labels = expanded
+            .get("labels")
+            .and_then(serde_json::Value::as_array)
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let available_labels = info.labels.keys().cloned().collect::<Vec<_>>();
+        let merged_labels =
+            quick_add::merge_labels(&model_labels, &hints.labels, &available_labels);
         let object = expanded
             .as_object_mut()
             .ok_or("Quick Add output must be an object")?;
@@ -974,7 +1029,7 @@ mod commands {
         object.insert("column".into(), serde_json::Value::String(hints.column));
         object.insert(
             "labels".into(),
-            serde_json::to_value(hints.labels).map_err(|e| e.to_string())?,
+            serde_json::to_value(merged_labels).map_err(|e| e.to_string())?,
         );
         let mut draft: ParsedCardDraft = serde_json::from_value(expanded)
             .map_err(|error| format!("model returned invalid quick-add JSON: {error}"))?;
@@ -1223,6 +1278,35 @@ title: My board
             .collect()
     }
     #[tauri::command]
+    pub fn list_archived_cards(path: String) -> Result<Vec<ArchivedCard>, String> {
+        archived_cards(&path)
+    }
+    #[tauri::command]
+    pub fn restore_card(path: String, id: String, revision_id: String) -> Result<CardInfo, String> {
+        if board(&path)?.read_card(&id).is_ok() {
+            return Err("card is already active".into());
+        }
+        let archived = archived_cards(&path)?
+            .into_iter()
+            .find(|item| item.card.id == id && item.revision_id == revision_id)
+            .ok_or_else(|| "archived card revision not found".to_string())?;
+        with_mutation(
+            &path,
+            &id,
+            CardInput {
+                title: archived.card.title,
+                body: archived.card.body,
+                column: archived.card.column,
+                labels: archived.card.labels,
+                label_colors: archived.card.label_colors,
+                position: Some(archived.card.position),
+                due: archived.card.due,
+                start: archived.card.start,
+            },
+            Some(vec![revision_id]),
+        )
+    }
+    #[tauri::command]
     pub fn read_card(path: String, id: String) -> Result<CardInfo, String> {
         let s = board(&path)?;
         card_info(id.clone(), &s.read_card(&id).map_err(|e| e.to_string())?)
@@ -1230,11 +1314,11 @@ title: My board
     #[tauri::command]
     pub fn add_card(path: String, input: CardInput) -> Result<CardInfo, String> {
         let id = ulid::Ulid::new().to_string();
-        with_mutation(&path, &id, input)
+        with_mutation(&path, &id, input, None)
     }
     #[tauri::command]
     pub fn update_card(path: String, id: String, input: CardInput) -> Result<CardInfo, String> {
-        with_mutation(&path, &id, input)
+        with_mutation(&path, &id, input, None)
     }
     #[tauri::command]
     pub fn resolve_conflict(
@@ -1331,6 +1415,7 @@ title: My board
                 due: old.due,
                 start: old.start,
             },
+            None,
         )
     }
     /// Return a stable POSIX root-relative path suitable for sharing, never an OS path.
@@ -1581,6 +1666,8 @@ pub fn run() {
             commands::update_label,
             commands::delete_label,
             commands::list_cards,
+            commands::list_archived_cards,
+            commands::restore_card,
             commands::read_card,
             commands::add_card,
             commands::update_card,

@@ -95,6 +95,42 @@ pub fn expand_compact(value: &Value) -> Result<Value, String> {
     }))
 }
 
+/// Keep semantic labels selected by the model, while making explicit hashtags authoritative.
+/// Model labels are restricted to labels that already exist on the board; explicit labels may
+/// introduce a new label. Matching is case-insensitive and board spelling is canonical.
+pub fn merge_labels(
+    model_labels: &[String],
+    explicit_labels: &[String],
+    available_labels: &[String],
+) -> Vec<String> {
+    let canonical = |label: &str| {
+        available_labels
+            .iter()
+            .find(|available| available.eq_ignore_ascii_case(label.trim()))
+            .cloned()
+    };
+    let mut merged = Vec::new();
+    for label in model_labels.iter().filter_map(|label| canonical(label)) {
+        if !merged
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&label))
+        {
+            merged.push(label);
+        }
+    }
+    for label in explicit_labels {
+        let label = canonical(label).unwrap_or_else(|| label.trim().to_string());
+        if !label.is_empty()
+            && !merged
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&label))
+        {
+            merged.push(label);
+        }
+    }
+    merged
+}
+
 pub fn compact_prompt(input: &str, columns: &str) -> String {
     let now = Local::now();
     compact_prompt_at(
@@ -116,7 +152,7 @@ pub fn compact_prompt_at_with_labels(
     input: &str, columns: &str, labels: &str, timestamp: &str, timezone: &str, offset: &str,
 ) -> String {
     format!(
-        "Extract one task as minified JSON only: t=clean title, b=notes or empty, c=column id, l=labels without #, m=label-to-hex-color map, d=due date, s=start date. Remove metadata (#label, in:, due:, start:) from t; preserve wording and negation. Reuse an available board label when appropriate; create a label/color only when explicitly requested. Markdown links in notes/body are allowed and must be preserved. Dates are YYYY-MM-DD or null. Default to the first column. Current time {timestamp} ({timezone}, UTC {offset}). Next weekday is strictly upcoming; next week is Monday; yearless date is next occurrence; vague dates are null. Columns: {columns}. Available labels and colors: {labels}. Input: {input}"
+        "Extract one task as minified JSON only: t=clean title, b=notes or empty, c=column id, l=matching available labels without #, m=label-to-hex-color map, d=due date, s=start date. Remove metadata (#label, in:, due:, start:) and scheduling phrases from t; preserve wording and negation. Classify the task with zero or more labels from Available labels when their meaning matches; do not omit an applicable label and do not invent labels. Markdown links in notes/body are allowed and must be preserved. Dates are YYYY-MM-DD or null. Resolve every concrete scheduling phrase: due:/due/by/on/before/this/next/tomorrow/tonight goes in d unless explicitly described as a start; start:/start/begin/from goes in s; a range from X to Y puts X in s and Y in d. Use null only when that date is absent or genuinely vague. Default to the first column. Current time {timestamp} ({timezone}, UTC {offset}). A named weekday is the strictly upcoming occurrence; next week is the coming Monday; a yearless date is its next occurrence. Columns: {columns}. Available labels and colors: {labels}. Input: {input}"
     )
 }
 
@@ -425,12 +461,26 @@ mod tests {
     }
 
     #[test]
-    fn compact_prompt_includes_available_label_colors() {
+    fn compact_prompt_requires_dates_and_semantic_board_labels() {
         let p = compact_prompt_at_with_labels(
-            "fix bug", "todo=Todo", "urgent=#ff0000, normal=#00ff00",
+            "fix bug tomorrow", "todo=Todo", "urgent=#ff0000, normal=#00ff00",
             "2026-09-05T00:00:00+00:00", "UTC", "+00:00",
         );
         assert!(p.contains("Available labels and colors: urgent=#ff0000, normal=#00ff00"));
+        assert!(p.contains("Classify the task with zero or more labels"));
+        assert!(p.contains("tomorrow/tonight goes in d"));
+        assert!(p.contains("a range from X to Y puts X in s and Y in d"));
+    }
+
+    #[test]
+    fn model_labels_survive_and_explicit_labels_are_merged() {
+        let available = vec!["Bug".into(), "urgent".into()];
+        let model = vec!["bug".into(), "hallucinated".into()];
+        let explicit = vec!["URGENT".into(), "customer".into(), "bug".into()];
+        assert_eq!(
+            merge_labels(&model, &explicit, &available),
+            vec!["Bug", "urgent", "customer"]
+        );
     }
 
     #[test]
