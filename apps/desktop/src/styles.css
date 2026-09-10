@@ -148,7 +148,7 @@ main { min-height: 100vh; background: var(--bg); }
 .create-actions .reveal-action:hover .action-label, .create-actions .reveal-action:focus-visible .action-label { max-width: 108px; }
 .utility-actions .utility-action { position: static; left: auto; bottom: auto; z-index: auto; width: 38px; height: 38px; border: 0; border-radius: 0; box-shadow: none; }
 .utility-actions .archive-action { --expanded-width: 142px; color: #292722; background: var(--accent); }
-.utility-actions .settings-action { --expanded-width: 112px; color: #f7f4ed; background: #252525; }
+.utility-actions .settings-action, .utility-actions .settings-action.active { --expanded-width: 112px; color: #f7f4ed; background: #252525; }
 .utility-actions .archive-action:hover, .utility-actions .archive-action:focus-visible { background: #cbbb98; }
 .utility-actions .settings-action:hover, .utility-actions .settings-action:focus-visible { background: #373737; }
 .utility-actions .utility-action + .utility-action { border-left: 1px solid color-mix(in srgb, white 26%, transparent); }
@@ -190,16 +190,22 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 .column-head .plus-icon { font-size: 23px; }
 .column-head .reveal-action:hover .action-label, .column-head .reveal-action:focus-visible .action-label { max-width: 86px; }
 .add:hover, .add:focus-visible { background: var(--surface); border-color: var(--border); }
-.dropzone { min-height: 160px; padding: 1px; border: 1px dashed transparent; border-radius: var(--radius-m); transition: background 160ms ease, border-color 160ms ease; }
-.dropzone.drag-over { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
-.card-drop-placeholder { height: 68px; margin: 0 0 8px; border: 2px dashed color-mix(in srgb, var(--accent) 72%, var(--border)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--accent) 13%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); animation: card-drop-pulse 900ms ease-in-out infinite; }
-.card-drop-placeholder::after { content: 'Drop card here'; display: grid; place-items: center; height: 100%; color: color-mix(in srgb, var(--accent) 70%, var(--text)); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
-@keyframes card-drop-pulse { 0%,100% { opacity: .65; transform: scale(.99); } 50% { opacity: 1; transform: scale(1); } }
+.dropzone { position: relative; min-height: 160px; padding: 1px; border: 1px solid transparent; border-radius: var(--radius-m); }
+.dropzone.drag-over { background: color-mix(in srgb, var(--accent) 3%, transparent); }
+/* Reserve column space and animate neighbors; targeting uses unshifted geometry. */
+.dropzone.has-drop-gap { padding-bottom: calc(1px + var(--card-drop-gap, 76px)); }
+.card.card-drop-shift { transform: translateY(var(--card-drop-gap, 76px)) !important; }
+.card-drop-indicator { position: absolute; z-index: 1001; left: 2px; right: 2px; height: 0; pointer-events: none; }
+.card-drop-indicator::before { content: 'Drop card here'; position: absolute; left: 0; right: 0; top: 0; height: 68px; display: grid; place-items: center; box-sizing: border-box; border: 2px dashed color-mix(in srgb, var(--text) 45%, var(--accent)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--accent) 20%, var(--surface)); color: var(--text); font-size: 11px; font-weight: 600; letter-spacing: .02em; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); animation: card-drop-pulse 900ms ease-in-out infinite; }
+@keyframes card-drop-pulse { 0%, 100% { opacity: .68; transform: scale(.99); } 50% { opacity: 1; transform: scale(1); } }
+.board-move-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+body:has(.card.dragging) .card:hover { transform: none; }
+.card:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
 .card { margin-bottom: 8px; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-raised); box-shadow: var(--shadow-tactile); cursor: grab; user-select: none; touch-action: none; transition: transform 160ms var(--motion), box-shadow 160ms ease, border-color 160ms ease; }
 .card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: 0 8px 20px -10px rgba(0,0,0,.24); }
 .card:active { cursor: grabbing; }
-.card.dragging { opacity: .18; }
+.card.dragging { opacity: .22; transform: none; box-shadow: none; }
 .drag-ghost { position: fixed; left: 0; top: 0; z-index: 1000; margin: 0; pointer-events: none; opacity: .96; border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); box-shadow: var(--shadow-float); cursor: grabbing; transform-origin: top left; transition: none; will-change: transform; }
 .card h3 { margin: 1px 0 6px; font-size: 14px; line-height: 1.35; font-weight: 600; letter-spacing: -.01em; }
 .card-body { min-width: 0; margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow: hidden; overflow-wrap: anywhere; }
@@ -441,6 +447,7 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .card-drop-indicator::before { animation: none !important; }
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
@@ -482,3 +489,72 @@ body:has(.card.dragging), body:has(.column-dragging), body:has(.card.dragging) *
   .ce-strip { overflow-x: auto; scrollbar-width: none; }
   .ce-strip::-webkit-scrollbar { display: none; }
 }
+
+/* Keep everyday board controls alongside model setup. */
+.settings { width: min(1200px,100%); max-width: 1200px; padding-bottom: 84px; }
+.settings-header { margin-bottom: 20px; }
+.settings-header > .eyebrow { display: none; }
+.settings-header h1 { font-size: 30px; }
+.settings-layout { grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); align-items: start; gap: 20px; }
+.board-settings { display: grid; gap: 20px; min-width: 0; }
+.settings-section { min-width: 0; border-radius: 14px; box-shadow: none; scroll-margin-top: 20px; }
+.settings .section-heading { padding: 20px 20px 16px; gap: 12px; }
+.settings .section-heading .eyebrow { display: none; }
+.settings .section-heading h2 { margin: 0 0 6px; font-size: 18px; }
+.settings .section-heading p { font-size: 12px; line-height: 1.5; }
+.settings .model-setup-status { min-width: 0; padding: 0; border: 0; background: none; }
+.settings .model-setup-status small { max-width: 125px; }
+.settings .model-setup-status:not(.ready) small { display: none; }
+.settings .provider-switch { margin-inline: 20px; }
+.settings .model-retention { margin: 12px 20px 0; padding: 8px 0; border: 0; background: none; }
+.settings .model-panel { padding: 16px 20px 20px; }
+.settings .discover-title { margin-top: 0; }
+.settings .installed-models + .discover-title { margin-top: 18px; }
+.settings .model-gallery { grid-template-columns: 1fr; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.settings .model-card { min-height: 0; padding: 12px; align-items: center; border: 0; border-radius: 0; background: none; }
+.settings .model-card + .model-card { border-top: 1px solid var(--border); }
+.settings .model-card.featured { background: var(--surface-muted); }
+.settings .model-card h3 { margin: 3px 0; font-size: 12px; }
+.settings .model-card p { max-width: 300px; }
+.settings .advanced-settings, .settings .danger-zone { margin-top: 14px; }
+.settings .advanced-settings summary, .settings .danger-zone summary { padding-top: 12px; }
+.settings .label-create { display: block; padding: 0 20px 14px; }
+.label-create fieldset { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: end; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.label-create fieldset:disabled { opacity: .5; }
+.settings .label-list { padding: 0 20px 20px; max-height: 260px; overflow-y: auto; }
+.settings .label-list .notice { margin: 0; background: none; padding: 0; font-size: 12px; }
+.settings .label-row { padding: 8px 0; border: 0; border-radius: 0; background: none; }
+.settings .sync-actions { grid-template-columns: 1fr 1fr; padding: 0 20px 16px; }
+.settings .sync-actions > div { grid-column: 1 / -1; margin-bottom: 6px; min-width: 0; overflow-wrap: anywhere; }
+.settings .device-details { margin: 0 20px 20px; }
+.settings .device-grid { grid-template-columns: 1fr; }
+.settings .model-list { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.settings .model-row { grid-template-columns: 26px minmax(0,1fr) auto; }
+.settings .model-row strong { overflow-wrap: anywhere; }
+.settings .model-row[hidden], .model-filter-empty[hidden] { display: none; }
+.settings .model-filter { margin: 10px 0; }
+.model-filter-empty { color: var(--text-muted); font-size: 12px; }
+.settings .custom-install { grid-template-columns: minmax(0,1fr); }
+.settings .manual-api-model { grid-template-columns: minmax(0,1fr) auto; }
+@media (max-width: 900px) {
+  .settings-layout { grid-template-columns: minmax(0,1fr); }
+  .settings { max-width: 720px; }
+}
+@media (max-width: 520px) {
+  .settings { padding: 20px 14px 84px; }
+  .settings .section-heading { display: flex; }
+  .settings .model-setup-status { width: auto; }
+  .settings .model-setup-status small { max-width: 90px; }
+  .settings .model-card p { max-width: 190px; }
+  .settings .label-create fieldset { grid-template-columns: minmax(0,1fr) auto auto; }
+  .settings .label-create button { grid-column: auto; }
+}
+
+.api-connection { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; margin: 14px 0; }
+.api-connection label { color: var(--text-muted); font-size: 11px; }
+.api-connection input { display: block; width: 100%; margin-top: 5px; font-size: 12px; }
+.settings .model-filter { width: 100%; font-size: 12px; }
+.settings .label-create label { display: grid; gap: 5px; }
+.settings .label-create input { margin-top: 0; }
+.settings a:focus-visible, .settings-section:focus-visible { outline: 2px solid var(--text-muted); outline-offset: 3px; }
+@media (max-width: 520px) { .api-connection { grid-template-columns: minmax(0,1fr); } }

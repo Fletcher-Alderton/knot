@@ -1,0 +1,398 @@
+/* Reading styles inspired by Baseline (https://github.com/aaaaalexis/obsidian-baseline).
+   Scoped to Markdown so the surrounding board keeps its existing design. */
+.markdown-rendered {
+  --md-blue: #6aadfa;
+  --md-green: #4ad55f;
+  --md-yellow: #e0cd63;
+  --md-red: #fe7070;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.65;
+  letter-spacing: -0.006em;
+  overflow-wrap: anywhere;
+}
+.markdown-rendered > :first-child {
+  margin-top: 0;
+}
+.markdown-rendered > :last-child {
+  margin-bottom: 0;
+}
+.markdown-rendered p {
+  margin: 0 0 1em;
+  white-space: normal;
+}
+.markdown-rendered :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--text);
+  line-height: 1.25;
+  margin: 1.4em 0 0.65em;
+  letter-spacing: -0.025em;
+  font-weight: 650;
+}
+.markdown-rendered h1 {
+  font-size: 1.8em;
+}
+.markdown-rendered h2 {
+  font-size: 1.5em;
+}
+.markdown-rendered h3 {
+  font-size: 1.25em;
+}
+.markdown-rendered h4 {
+  font-size: 1.12em;
+}
+.markdown-rendered :is(h5, h6) {
+  font-size: 1em;
+}
+.markdown-rendered strong {
+  font-weight: 700;
+}
+.markdown-rendered a {
+  color: var(--text);
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.markdown-rendered a:hover {
+  text-decoration-color: currentColor;
+}
+.markdown-rendered .internal-link {
+  color: #7965b5;
+}
+.markdown-rendered .is-unresolved {
+  opacity: 0.6;
+}
+.markdown-rendered mark {
+  background: color-mix(in srgb, var(--md-yellow) 38%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 0.12em;
+}
+.markdown-rendered :is(ul, ol) {
+  padding-left: 1.6em;
+  margin: 0.5em 0 1em;
+}
+.markdown-rendered li {
+  margin: 0.25em 0;
+  padding-left: 0.15em;
+}
+.markdown-rendered li > p {
+  display: block;
+}
+.markdown-rendered li:has(> .task-checkbox),
+.markdown-rendered li:has(> p > .task-checkbox) {
+  list-style: none;
+}
+.markdown-rendered li:has(> .task-checkbox.is-checked) {
+  color: var(--text-muted);
+}
+.markdown-rendered .task-checkbox {
+  display: inline-grid;
+  place-content: center;
+  width: 1em;
+  height: 1em;
+  margin: 0 0.4em 0 -1.4em;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  vertical-align: -0.12em;
+  background: transparent;
+}
+.markdown-rendered .task-checkbox.is-checked {
+  background: var(--text);
+  border-color: var(--text);
+}
+.markdown-rendered .task-checkbox.is-checked::before {
+  content: "";
+  width: 0.6em;
+  height: 0.6em;
+  background: var(--surface);
+  transform: none;
+  clip-path: polygon(14% 44%, 0 59%, 39% 100%, 100% 17%, 84% 3%, 38% 67%);
+}
+.markdown-rendered blockquote {
+  margin: 1em 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.markdown-rendered blockquote > :last-child {
+  margin-bottom: 0;
+}
+.markdown-rendered code {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.85em;
+  border-radius: 5px;
+  padding: 0.15em 0.35em;
+  background: color-mix(in srgb, var(--text) 5%, var(--surface));
+}
+.markdown-rendered pre {
+  overflow: auto;
+  padding: 1em;
+  margin: 1em 0;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3%, var(--surface));
+  white-space: pre;
+}
+.markdown-rendered pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.82em;
+}
+.markdown-rendered .hljs {
+  color: #383a42;
+}
+.markdown-rendered .hljs-comment {
+  color: #8a8e9d;
+}
+.markdown-rendered :is(.hljs-keyword, .hljs-tag, .hljs-selector-tag) {
+  color: #e45749;
+}
+.markdown-rendered :is(.hljs-string, .hljs-regexp) {
+  color: #0d97b3;
+}
+.markdown-rendered :is(.hljs-number, .hljs-literal) {
+  color: #a626a4;
+}
+.markdown-rendered :is(.hljs-title, .hljs-built_in) {
+  color: #b76b02;
+}
+.markdown-rendered table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.9em;
+}
+.markdown-rendered :is(th, td) {
+  padding: 0.5em 0.8em;
+  border: 1px solid var(--border);
+}
+.markdown-rendered th {
+  background: color-mix(in srgb, var(--text) 3%, var(--surface));
+  font-weight: 600;
+}
+.markdown-rendered hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.8em 0;
+}
+.markdown-rendered :is(img, video, audio, svg) {
+  max-width: 100%;
+}
+.markdown-rendered :is(img, video) {
+  border-radius: 8px;
+  object-fit: contain;
+}
+.markdown-rendered img:not([height]) {
+  height: auto;
+}
+.markdown-rendered .callout {
+  --callout-color: var(--md-blue);
+  margin: 1em 0;
+  padding: 0.8em 1em;
+  border: 1px solid color-mix(in srgb, var(--callout-color) 22%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--callout-color) 9%, var(--surface));
+}
+.markdown-rendered
+  .callout[data-callout]:is(
+    [data-callout="tip"],
+    [data-callout="success"],
+    [data-callout="check"],
+    [data-callout="done"]
+  ) {
+  --callout-color: var(--md-green);
+}
+.markdown-rendered
+  .callout:is(
+    [data-callout="warning"],
+    [data-callout="caution"],
+    [data-callout="attention"],
+    [data-callout="question"],
+    [data-callout="help"],
+    [data-callout="faq"]
+  ) {
+  --callout-color: var(--md-yellow);
+}
+.markdown-rendered
+  .callout:is(
+    [data-callout="danger"],
+    [data-callout="error"],
+    [data-callout="bug"],
+    [data-callout="failure"],
+    [data-callout="fail"],
+    [data-callout="missing"]
+  ) {
+  --callout-color: var(--md-red);
+}
+.markdown-rendered .callout:is([data-callout="quote"], [data-callout="cite"]) {
+  --callout-color: #999;
+}
+.markdown-rendered .callout-title {
+  font-weight: 650;
+  color: color-mix(in srgb, var(--callout-color) 60%, var(--text));
+}
+.markdown-rendered summary {
+  cursor: pointer;
+}
+.markdown-rendered .callout-icon {
+  margin-right: 0.5em;
+}
+.markdown-rendered .callout-content {
+  margin-top: 0.5em;
+}
+.markdown-rendered .callout-content > :last-child {
+  margin-bottom: 0;
+}
+.markdown-rendered .internal-embed {
+  display: block;
+  padding: 0.8em 1em;
+  border-left: 2px solid var(--border-strong);
+  margin: 0.7em 0;
+}
+.markdown-rendered .embed-title {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.6em;
+}
+.markdown-rendered .embed-content {
+  display: block;
+}
+.markdown-rendered .internal-embed small {
+  display: block;
+  color: var(--text-muted);
+}
+.markdown-rendered .footnotes {
+  margin-top: 2em;
+  padding-top: 1em;
+  border-top: 1px solid var(--border);
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.markdown-rendered .katex-display {
+  overflow: auto hidden;
+  padding: 0.5em 0;
+}
+.markdown-rendered .mermaid-rendered {
+  background: transparent;
+  text-align: center;
+}
+.card-body.markdown-rendered {
+  font-size: 12px;
+  line-height: 1.55;
+}
+#card-live-editor {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+/* CodeMirror preserves source whitespace; rendered blocks must use HTML layout. */
+.live-markdown-block {
+  display: flow-root;
+  cursor: text;
+  white-space: normal;
+  min-height: 0.35em;
+  padding-bottom: 0.35em;
+}
+.live-markdown-block > :first-child {
+  margin-top: 0;
+}
+.live-markdown-block > :last-child {
+  margin-bottom: 0;
+}
+.live-heading {
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.live-h1 {
+  font-size: 1.8em;
+}
+.live-h2 {
+  font-size: 1.5em;
+}
+.live-h3 {
+  font-size: 1.25em;
+}
+.live-code {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.85em;
+}
+.live-link {
+  color: #7965b5;
+  text-decoration: underline;
+}
+.live-syntax {
+  color: var(--text-muted);
+}
+@media (prefers-color-scheme: dark) {
+  .markdown-rendered {
+    --md-blue: #5694da;
+    --md-green: #48c45a;
+    --md-yellow: #c4b45e;
+    --md-red: #d95a5f;
+  }
+  .markdown-rendered .internal-link {
+    color: #bb9ef5;
+  }
+  .markdown-rendered .hljs {
+    color: #abb2bf;
+  }
+  .markdown-rendered .hljs-comment {
+    color: #747b8b;
+  }
+  .markdown-rendered :is(.hljs-keyword, .hljs-tag) {
+    color: #e16d76;
+  }
+  .markdown-rendered .hljs-string {
+    color: #58b6c2;
+  }
+  .markdown-rendered :is(.hljs-number, .hljs-literal) {
+    color: #c678de;
+  }
+  .markdown-rendered :is(.hljs-title, .hljs-built_in) {
+    color: #d19a66;
+  }
+}
+.markdown-rendered .markdown-tag {
+  border-radius: 1em;
+  padding: 0.1em 0.55em;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+.markdown-rendered .pdf-embed {
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.markdown-rendered .alternate-task .task-checkbox {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.markdown-rendered .alternate-task .task-checkbox::before {
+  display: none;
+}
+.markdown-rendered .footnotes .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

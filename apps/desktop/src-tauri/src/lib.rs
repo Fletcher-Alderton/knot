@@ -311,6 +311,28 @@ fn board(path: &str) -> Result<FsBoardStore, String> {
     }
     Ok(r.boards.get(&k).unwrap().clone())
 }
+fn read_board_attachment(path: &str, relative: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let root = fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let relative = Path::new(relative);
+    if relative.is_absolute() || relative.components().any(|c| !matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)) {
+        return Err("Attachment must be inside the board".into());
+    }
+    let file = fs::canonicalize(root.join(relative)).map_err(|e| e.to_string())?;
+    if !file.starts_with(&root) { return Err("Attachment must be inside the board".into()); }
+    let extension = file.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "svg" | "mp3" | "wav" | "ogg" | "m4a" | "mp4" | "webm" | "mov" | "pdf") {
+        return Err("Unsupported attachment type".into());
+    }
+    let source = fs::File::open(file).map_err(|e| e.to_string())?;
+    if !source.metadata().map_err(|e| e.to_string())?.is_file() { return Err("Attachment is not a file".into()); }
+    let limit = 50 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    source.take(limit + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit { return Err("Attachment exceeds 50 MB".into()); }
+    Ok(bytes)
+}
+
 fn save_store(path: &str, store: FsBoardStore) {
     runtime().lock().unwrap().boards.insert(key(path), store);
 }
@@ -1265,6 +1287,11 @@ title: My board
             Ok(())
         })
     }
+    /// Only media inside an opened board is exposed to the Markdown renderer.
+    #[tauri::command]
+    pub fn read_attachment(path: String, relative: String) -> Result<tauri::ipc::Response, String> {
+        read_board_attachment(&path, &relative).map(tauri::ipc::Response::new)
+    }
     #[tauri::command]
     pub fn list_cards(path: String) -> Result<Vec<CardInfo>, String> {
         let s = board(&path)?;
@@ -1666,6 +1693,7 @@ pub fn run() {
             commands::update_label,
             commands::delete_label,
             commands::list_cards,
+            commands::read_attachment,
             commands::list_archived_cards,
             commands::restore_card,
             commands::read_card,
@@ -1706,6 +1734,24 @@ pub fn run() {
 mod tests {
     use super::commands::*;
     use super::*;
+
+    #[test]
+    fn read_board_attachment_confines_media_to_board() {
+        let root = std::env::temp_dir().join(format!("irohmd-attachments-{}", ulid::Ulid::new()));
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(root.join("assets/test.png"), b"image").unwrap();
+        fs::write(root.join("secret.txt"), b"secret").unwrap();
+        let path = root.to_str().unwrap();
+        assert_eq!(read_board_attachment(path, "assets/test.png").unwrap(), b"image");
+        assert!(read_board_attachment(path, "../secret.png").is_err());
+        assert!(read_board_attachment(path, "secret.txt").is_err());
+        assert!(read_board_attachment(path, root.join("assets/test.png").to_str().unwrap()).is_err());
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink(std::env::temp_dir(), root.join("outside")).unwrap();
+            assert!(read_board_attachment(path, "outside/missing.png").is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn parses_json_from_chatty_model_responses() {

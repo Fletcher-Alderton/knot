@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath } from './main';
+import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll } from './main';
 
 describe('Kanban UI',()=>{
  it('renders Markdown safely and preserves only safe links',()=>{const html=renderMarkdown('[docs](https://example.com) [bad](javascript:alert(1)) <script>alert(1)</script>');expect(html).toContain('href="https://example.com"');expect(html).not.toContain('javascript:');expect(html).not.toContain('<script>');});
@@ -56,6 +56,49 @@ it('pairs a serialized endpoint address for the current board',async()=>{
    expect(document.querySelector('.toolbar')?.parentElement?.querySelector('.board-scroll')).not.toBeNull();
    expect(document.querySelector('.board-scroll')?.querySelector('.columns')).not.toBeNull();
  });
+ it('keeps board scroll and column order while opening, editing and closing a card',async()=>{
+   state.boardPath='/stable-board-scroll';state.view='board';state.selected=null;state.drafts={};state.error='';state.dialog=null;
+   state.columns=[{id:'todo',name:'Todo'},{id:'doing',name:'Doing'},{id:'done',name:'Done'}];
+   state.cards=[{id:'stable-card',title:'Card',body:'Body',column:'doing',position:4500,labels:[],updatedAt:0}];
+   const invoke=vi.fn(async(_command:string,args:any)=>({id:args.id,...args.input,updated_at:'2026-09-10T00:00:00Z'}));setInvokeForTests(invoke as any);
+   render();const scroll=document.querySelector<HTMLElement>('.board-scroll')!;scroll.scrollLeft=640;scroll.scrollTop=180;
+   document.querySelector<HTMLElement>('[data-id="stable-card"]')!.click();
+   const check=()=>{
+     expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollLeft).toBe(640);
+     expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollTop).toBe(180);
+     expect(Array.from(document.querySelectorAll<HTMLElement>('.columns > .column'),el=>el.dataset.column)).toEqual(['todo','doing','done']);
+   };
+   check();
+   const title=document.querySelector<HTMLInputElement>('#title')!;title.value='Edited';title.dispatchEvent(new Event('input',{bubbles:true}));render();check();
+   document.querySelector<HTMLElement>('#close')!.click();await vi.waitFor(()=>expect(state.selected).toBeNull());check();
+   expect(invoke).toHaveBeenCalledTimes(1);
+   expect(invoke).toHaveBeenCalledWith('update_card',expect.objectContaining({input:expect.objectContaining({position:4500})}));
+   setInvokeForTests(null);
+ });
+ it('restores scroll per board without leaking it to another board',()=>{
+   state.boardPath='/scroll-first';state.view='board';state.selected=null;state.cards=[];render();
+   const scroll=document.querySelector<HTMLElement>('.board-scroll')!;scroll.scrollLeft=500;scroll.scrollTop=125;
+   state.boardPath='/scroll-second';render();
+   expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollLeft).toBe(0);
+   document.querySelector<HTMLElement>('.board-scroll')!.scrollLeft=240;
+   state.boardPath='/scroll-first';render();
+   expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollLeft).toBe(500);
+   expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollTop).toBe(125);
+   state.view='settings';render();state.view='board';render();
+   expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollLeft).toBe(500);
+   state.boardPath='/scroll-second';render();
+   expect(document.querySelector<HTMLElement>('.board-scroll')!.scrollLeft).toBe(240);
+ });
+ it.each([1000,undefined])('does not reorder equal-position cards when saving or refreshing (position: %s)',async(position)=>{
+   state.boardPath='/stable-card-order';state.view='board';state.selected=null;state.drafts={};state.columns=[{id:'todo',name:'Todo'}];
+   state.cards=[{id:'a',title:'A',body:'Body',column:'todo',position,labels:[],updatedAt:0},{id:'b',title:'B',body:'Body',column:'todo',position,labels:[],updatedAt:1}];
+   const invoke=vi.fn(async(command:string,args:any)=>command==='update_card'?{id:args.id,...args.input,updated_at:'2026-09-10T00:00:00Z'}:[...state.cards].reverse().map(card=>({...card,updated_at:new Date(card.updatedAt).toISOString()})));setInvokeForTests(invoke as any);
+   render();const order=()=>Array.from(document.querySelectorAll<HTMLElement>('.card'),el=>el.dataset.id);
+   expect(order()).toEqual(['a','b']);document.querySelector<HTMLElement>('[data-id="a"]')!.click();document.querySelector<HTMLElement>('#close')!.click();
+   await vi.waitFor(()=>expect(state.selected).toBeNull());expect(order()).toEqual(['a','b']);
+   expect(invoke).toHaveBeenCalledWith('update_card',expect.objectContaining({input:expect.objectContaining({position})}));
+   await loadCards();expect(order()).toEqual(['a','b']);setInvokeForTests(null);
+ });
  it('removes redundant board and card chrome while keeping accessible compact actions',()=>{
    state.boardPath='/board';state.boardTitle='Board';state.view='board';state.columns=[{id:'todo',name:'Todo'}];state.cards=Array.from({length:7},(_,i)=>({id:`card-${i}`,title:`Card ${i}`,body:'',column:'todo',labels:[],updatedAt:0}));state.selected=null;render();
    const page=document.querySelector('[data-page=board]')!;
@@ -87,7 +130,7 @@ it('pairs a serialized endpoint address for the current board',async()=>{
    const values=new Map<string,string>();const dataTransfer={effectAllowed:'none',dropEffect:'none',setData:(type:string,value:string)=>values.set(type,value),getData:(type:string)=>values.get(type)||''};
    const dragStart=new Event('dragstart',{bubbles:true,cancelable:true});Object.defineProperty(dragStart,'dataTransfer',{value:dataTransfer});document.querySelector<HTMLElement>('[data-id=card-dnd]')!.dispatchEvent(dragStart);
    const drop=new Event('drop',{bubbles:true,cancelable:true});Object.defineProperty(drop,'dataTransfer',{value:dataTransfer});document.querySelector<HTMLElement>('[data-drop-column=done]')!.dispatchEvent(drop);
-   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'card-dnd',column:'done',position:1000}));
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'card-dnd',column:'done',position:1024}));
    expect(state.cards[0].column).toBe('done');setInvokeForTests(null);
  });
  it('renames boards and columns and creates columns through persisted commands',async()=>{
@@ -191,11 +234,11 @@ it('pairs a serialized endpoint address for the current board',async()=>{
    const hit=vi.fn(()=>target);Object.defineProperty(document,'elementFromPoint',{value:hit,configurable:true});
    card.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true,clientX:10,clientY:10,button:0}));
    document.dispatchEvent(new MouseEvent('pointermove',{bubbles:true,clientX:30,clientY:30,buttons:1}));
-   expect(target.classList.contains('drag-over')).toBe(true);expect(card.classList.contains('dragging')).toBe(true);expect(document.querySelector('.card-drop-placeholder')).not.toBeNull();
+   expect(target.classList.contains('drag-over')).toBe(true);expect(card.classList.contains('dragging')).toBe(true);expect(document.querySelector('.card-drop-indicator')).not.toBeNull();
    const ghost=document.querySelector<HTMLElement>('.drag-ghost');expect(ghost).not.toBeNull();expect(ghost!.style.transformOrigin).toBe('10px 10px');
    document.dispatchEvent(new MouseEvent('pointerup',{bubbles:true,clientX:30,clientY:30,button:0}));
    expect(document.querySelector('.drag-ghost')).toBeNull();
-   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'pointer-card',column:'done',position:1000}));
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('move_card',{path:'/board',id:'pointer-card',column:'done',position:1024}));
    setInvokeForTests(null);
  });
 
@@ -208,6 +251,23 @@ it('pairs a serialized endpoint address for the current board',async()=>{
    expect(page.querySelector('.model-setup-status')?.textContent).toContain('Choose a model');
    expect(page.querySelectorAll('[data-install-recommended]').length).toBeGreaterThan(0);
    expect(page.textContent).not.toContain('HF GGUF filename');
+ });
+
+ it('filters API models without losing connection edits or model selection',()=>{
+   state.view='settings';state.error='';state.modelLoading=false;
+   state.modelSettings={provider:'openai',openai_api_key:'saved-key',model_id:'example/alpha'};
+   state.openaiModels=[{id:'example/alpha'},{id:'example/beta'}];render();
+   const key=document.querySelector<HTMLInputElement>('#openai-api-key')!;key.value='edited-key';
+   const filter=document.querySelector<HTMLInputElement>('[data-model-filter]')!;
+   filter.value=' BETA ';filter.dispatchEvent(new Event('input'));
+   expect(document.querySelector<HTMLElement>('[data-select-openai="example/alpha"]')!.hidden).toBe(true);
+   expect(document.querySelector<HTMLElement>('[data-select-openai="example/beta"]')!.hidden).toBe(false);
+   expect(key.value).toBe('edited-key');expect(state.modelSettings.model_id).toBe('example/alpha');
+   filter.value='missing';filter.dispatchEvent(new Event('input'));
+   expect(document.querySelector<HTMLElement>('.model-filter-empty')!.hidden).toBe(false);
+   filter.value='';filter.dispatchEvent(new Event('input'));
+   expect(document.querySelectorAll('.model-row[hidden]')).toHaveLength(0);
+   expect(document.querySelector<HTMLElement>('.model-filter-empty')!.hidden).toBe(true);
  });
 
  it('installs and activates a recommended model in one click',async()=>{
@@ -414,5 +474,153 @@ describe('OpenAI-compatible provider',()=>{
   expect(state.quickAddOpen).toBe(true);
   expect(document.querySelector('#quick-add-form')).not.toBeNull();
   state.quickAddOpen=false;
+ });
+});
+describe('Draft preservation',()=>{
+ it('preserves unsaved card body draft across ordinary app renders',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original body',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async()=>[]);setInvokeForTests(invoke as any);render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='Draft body';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('Draft body');
+   render();
+   expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Draft body');
+   setInvokeForTests(null);
+ });
+ it('preserves unsaved card title draft across ordinary app renders',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Body',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   render();
+   const title=document.querySelector<HTMLInputElement>('#title')!;title.value='Draft title';
+   title.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.title).toBe('Draft title');
+   render();
+   expect(document.querySelector<HTMLInputElement>('#title')?.value).toBe('Draft title');
+ });
+ it('preserves unsaved draft when loadCards refreshes from backend',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async(command:string)=>{if(command==='list_cards')return [{id:'card-1',title:'Card',body:'Refreshed from disk',column:'backlog',labels:[]}];throw new Error(command)});setInvokeForTests(invoke as any);
+   render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='User draft';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('User draft');
+   await loadCards();
+   expect(state.cards[0].body).toBe('User draft');
+   setInvokeForTests(null);
+ });
+ it('preserves unsaved draft when poll refreshes cards',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async(command:string)=>{if(command==='poll_watch_events')return [{path:'/board/card-1.md',kind:'modify',valid:true,duplicate:false}];if(command==='list_cards')return [{id:'card-1',title:'Card',body:'Polled from disk',column:'backlog',labels:[]}];throw new Error(command)});setInvokeForTests(invoke as any);
+   render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='User draft during poll';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('User draft during poll');
+   await poll();
+   expect(state.cards[0].body).toBe('User draft during poll');
+   setInvokeForTests(null);
+ });
+ it('preserves unsaved draft on save failure',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async(command:string)=>{if(command==='update_card')throw new Error('Save failed');throw new Error(command)});setInvokeForTests(invoke as any);
+   render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='Unsaved draft';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   document.querySelector<HTMLElement>('#save')!.click();
+   await vi.waitFor(()=>expect(state.error).toContain('Save failed'));
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('Unsaved draft');
+   render();
+   expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Unsaved draft');
+   setInvokeForTests(null);
+ });
+ it('clears draft on successful save',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async(command:string)=>{if(command==='update_card')return {id:'card-1',title:'Updated',body:'Saved body',column:'backlog',labels:[],updated_at:'2024-01-01T00:00:00Z'};throw new Error(command)});setInvokeForTests(invoke as any);
+   render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='New body';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('New body');
+   document.querySelector<HTMLElement>('#save')!.click();
+   await vi.waitFor(()=>expect(state.selected).toBeNull());
+   expect(state.drafts['/board']?.['card-1']).toBeUndefined();
+   setInvokeForTests(null);
+ });
+ it('scopes drafts by board and restores correct draft when reopening board',async()=>{
+   state.boardPath='/board1';state.view='board';state.cards=[{id:'card-1',title:'Card1',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async(command:string)=>{if(command==='list_cards')return [{id:'card-1',title:'Card1',body:'From disk',column:'backlog',labels:[]}];throw new Error(command)});setInvokeForTests(invoke as any);
+   render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='Draft in board1';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board1']?.['card-1']?.body).toBe('Draft in board1');
+   state.boardPath='/board2';state.cards=[{id:'card-1',title:'Card1',body:'Original2',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';
+   render();
+   expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Original2');
+   state.boardPath='/board1';state.cards=[{id:'card-1',title:'Card1',body:'From disk',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';
+   render();
+   expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Draft in board1');
+   setInvokeForTests(null);
+ });
+ it('preserves explicit date clearing',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Body',column:'backlog',labels:[],updatedAt:0,due:'2024-01-01',start:'2024-01-02'}];state.selected='card-1';state.drafts={};
+   render();
+   const dueInput=document.querySelector<HTMLInputElement>('#due')!;dueInput.value='';
+   dueInput.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.due).toBe('');
+   render();
+   expect(document.querySelector<HTMLInputElement>('#due')?.value).toBe('');
+ });
+ it('preserves newer edits when an older save completes',async()=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   let resolveSave:()=>void;
+   const savePromise=new Promise<void>(res=>{resolveSave=res;});
+   const invoke=vi.fn(async(command:string)=>{if(command==='update_card'){await savePromise;return {id:'card-1',title:'Saved',body:'Saved body',column:'backlog',labels:[],updated_at:'2024-01-01T00:00:00Z'};}throw new Error(command)});setInvokeForTests(invoke as any);
+   render();
+   const body=document.querySelector<HTMLTextAreaElement>('#body')!;body.value='First draft';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   document.querySelector<HTMLElement>('#save')!.click();
+   body.value='Second draft';
+   body.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('Second draft');
+   resolveSave!();
+   await vi.waitFor(()=>expect(state.cards[0].body).toBe('Saved body'));
+   expect(state.selected).toBe('card-1');
+   expect(state.drafts['/board']?.['card-1']?.body).toBe('Second draft');
+   expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Second draft');
+   setInvokeForTests(null);
+ });
+ it.each([false,true])('does not close another card or overwrite another board after save (switch board: %s)',async(switchBoard)=>{
+   state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   let complete!:(value:unknown)=>void;
+   setInvokeForTests((()=>new Promise(resolve=>{complete=resolve;})) as any);
+   render();document.querySelector<HTMLElement>('#save')!.click();
+   if(switchBoard)state.boardPath='/other-board';
+   const nextId=switchBoard?'card-1':'card-2';
+   state.cards=[{id:nextId,title:'Other card',body:'Other body',column:'backlog',labels:[],updatedAt:0}];state.selected=nextId;render();
+   complete({id:'card-1',title:'Saved card',body:'Saved body',column:'backlog',labels:[]});
+   await vi.waitFor(()=>expect(state.drafts['/board']?.['card-1']).toBeUndefined());
+   expect(state.selected).toBe(nextId);
+   expect(state.cards[0].body).toBe('Other body');
+   expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Other body');
+   setInvokeForTests(null);
+ });
+ it('ignores a board refresh that finishes after switching boards',async()=>{
+   state.boardPath='/first-board';state.view='board';state.cards=[];state.selected=null;state.drafts={};
+   let complete!:(value:unknown)=>void;
+   setInvokeForTests((()=>new Promise(resolve=>{complete=resolve;})) as any);
+   const loading=loadCards();
+   state.boardPath='/second-board';state.cards=[{id:'other',title:'Other',body:'Other body',column:'backlog',labels:[],updatedAt:0}];state.loading=false;
+   complete([{id:'first',title:'First',body:'First board body',column:'backlog',labels:[]}]);
+   await loading;
+   expect(state.cards.map(card=>card.id)).toEqual(['other']);
+   expect(state.loading).toBe(false);
+   setInvokeForTests(null);
+ });
+ it('preserves changes made through column and label popovers',()=>{
+   state.boardPath='/board';state.view='board';state.columns=[{id:'backlog',name:'Backlog'},{id:'done',name:'Done'}];state.labels={work:'#123456'};state.cards=[{id:'card-1',title:'Card',body:'Body',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};
+   render();
+   document.querySelector<HTMLElement>('[data-set-column="done"]')!.click();
+   document.querySelector<HTMLElement>('[data-toggle-label="work"]')!.click();
+   render();
+   expect(document.querySelector<HTMLSelectElement>('#column')!.value).toBe('done');
+   expect(document.querySelector<HTMLSelectElement>('#labels')!.selectedOptions[0].value).toBe('work');
+   expect(document.querySelector('.ce-label-chip')?.textContent).toContain('work');
  });
 });

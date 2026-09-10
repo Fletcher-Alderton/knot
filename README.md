@@ -87,3 +87,43 @@ See [the TDD build plan](docs/TDD%20Build%20Plan%20%E2%80%94%20P2P%20Markdown%20
 ## License
 
 MIT; see [LICENSE](LICENSE).
+
+### Moving cards
+
+Drag a card above or below another card; neighboring cards slide aside to open a
+gap for the pulsing drop box. The gap stays stable while you move within it.
+Reduced-motion settings disable the pulse and card animation. Hold near the board's top or bottom edge to
+scroll while dragging. Release outside the board, or press Escape, to cancel.
+
+With a card focused, use **Alt+↑/↓** to reorder within its column or **Alt+←/→** to
+move between columns. Enter or Space opens the card. Moving retains keyboard focus;
+opening or editing never changes board scroll or card order.
+
+### Obsidian Markdown in cards
+
+Cards and the editor share an Obsidian-flavored renderer. The editor is a single editable live-preview surface: click rendered text to
+edit its Markdown in place. Syntax appears in the active block and renders again
+when the cursor moves away. Undo, selection, and clipboard operations preserve
+the underlying Markdown. Reference links, heading anchors, and footnote numbering
+resolve across the whole editor document, not separately within each visual block.
+Unsaved drafts survive UI redraws and board refreshes in memory; close the editor
+to save them to disk. Drafts do not survive an application restart.
+Reading styles follow the Baseline theme's restrained Inter typography, rounded
+callouts and code blocks, neutral surfaces, and light and dark syntax colors.
+
+Supported syntax includes CommonMark/GFM tables and lists, task lists (including
+Baseline alternate task markers), highlights, comments, wiki links and aliases,
+heading and block references, note/section/block embeds, reference and inline
+footnotes, collapsible callouts, syntax-highlighted code, LaTeX math (KaTeX), and
+Mermaid diagrams. Code spans and fences preserve literal Markdown syntax.
+
+Wiki links resolve card IDs or titles within the current board. Media embeds can
+use HTTPS URLs or board-relative files, for example `![[assets/sketch.png|320]]`.
+Local image, audio, video, and PDF attachments are restricted to the board folder
+(including symlink resolution) and 50 MB per file. Missing notes/files remain
+visible as unresolved references. Obsidian vault discovery, plugins such as
+Dataview/Bases, and attachment synchronization are not provided by this renderer.
+Raw HTML is sanitized; scripts, arbitrary frames, and executable links are removed.
+
+References: [Obsidian syntax](https://obsidian.md/help/obsidian-flavored-markdown),
+[Baseline theme](https://github.com/aaaaalexis/obsidian-baseline).
