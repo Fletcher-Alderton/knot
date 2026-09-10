@@ -4,6 +4,7 @@ import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, open
 
 describe('Kanban UI',()=>{
  it('renders Markdown safely and preserves only safe links',()=>{const html=renderMarkdown('[docs](https://example.com) [bad](javascript:alert(1)) <script>alert(1)</script>');expect(html).toContain('href="https://example.com"');expect(html).not.toContain('javascript:');expect(html).not.toContain('<script>');});
+ it('renders Obsidian task syntax as compact task elements',()=>{const html=renderMarkdown('- [x] Done\n- [ ] Todo');expect(html).toContain('class="task-checkbox is-checked"');expect(html).toContain('class="task-checkbox"');expect(html).not.toContain('<input');});
  it('shares POSIX root-relative card paths',()=>{expect(sharePath('\\Users\\me\\board\\card.md')).toBe('/Users/me/board/card.md');expect(sharePath('/Users/me/board/card.md','/Users/me')).toBe('/board/card.md');expect(shareCardPath('/Users/me/board','abc')).toBe('/cards/abc.md');});
  it('escapes card content before rendering',()=>expect(renderCardText('<script>')).toBe('&lt;script&gt;'));
  it('normalizes backend card payloads',()=>expect(normalize({id:'a',title:'A',body:'B',column:'doing',labels:['x'],updated_at:'2024-01-01T00:00:00Z'})).toMatchObject({id:'a',column:'doing',labels:['x'],updatedAt:1704067200000}));
@@ -49,6 +50,11 @@ it('pairs a serialized endpoint address for the current board',async()=>{
  it('shows one icon-only smart board action',()=>{
    state.boardPath='/board';state.view='board';render();
    expect(document.querySelector('#open')?.textContent?.trim()).toBe('＋');expect(document.querySelector('#create')).toBeNull();
+ });
+ it('keeps the board header outside the scrollable columns viewport',()=>{
+   state.boardPath='/board';state.view='board';state.columns=[{id:'todo',name:'Todo'}];state.cards=[];render();
+   expect(document.querySelector('.toolbar')?.parentElement?.querySelector('.board-scroll')).not.toBeNull();
+   expect(document.querySelector('.board-scroll')?.querySelector('.columns')).not.toBeNull();
  });
  it('removes redundant board and card chrome while keeping accessible compact actions',()=>{
    state.boardPath='/board';state.boardTitle='Board';state.view='board';state.columns=[{id:'todo',name:'Todo'}];state.cards=Array.from({length:7},(_,i)=>({id:`card-${i}`,title:`Card ${i}`,body:'',column:'todo',labels:[],updatedAt:0}));state.selected=null;render();
