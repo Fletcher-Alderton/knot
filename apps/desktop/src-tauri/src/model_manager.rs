@@ -55,12 +55,24 @@ impl Default for ModelSettings {
 
 pub fn models_root() -> PathBuf {
     if let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")) {
-        return PathBuf::from(base).join("IrohMD/models");
+        let knot = PathBuf::from(&base).join("Knot/models");
+        let legacy = PathBuf::from(base).join("IrohMD/models");
+        return if knot.exists() || !legacy.exists() {
+            knot
+        } else {
+            legacy
+        };
     }
-    std::env::var_os("HOME")
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config/irohmd/models")
+        .unwrap_or_else(|| PathBuf::from("."));
+    let knot = home.join(".config/knot/models");
+    let legacy = home.join(".config/irohmd/models");
+    if knot.exists() || !legacy.exists() {
+        knot
+    } else {
+        legacy
+    }
 }
 
 fn settings_path() -> PathBuf {

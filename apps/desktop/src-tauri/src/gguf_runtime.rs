@@ -37,7 +37,11 @@ fn lock_runtime() -> Result<MutexGuard<'static, Option<GgufRuntime>>, String> {
 fn runtime(guard: &mut Option<GgufRuntime>) -> Result<&mut GgufRuntime, String> {
     if guard.is_none() {
         let mut backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-        if std::env::var_os("IROHMD_LLAMA_LOG").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        if std::env::var_os("KNOT_LLAMA_LOG")
+            .or_else(|| std::env::var_os("IROHMD_LLAMA_LOG"))
+            .as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
             backend.void_logs();
         }
         *guard = Some(GgufRuntime {
@@ -56,7 +60,7 @@ fn checked_model_path(path: &str, models_root: &Path) -> Result<PathBuf, String>
     if !candidate.starts_with(&root)
         || candidate.extension().and_then(|x| x.to_str()) != Some("gguf")
     {
-        return Err("model must be a GGUF file inside the IrohMD model directory".into());
+        return Err("model must be a GGUF file inside the Knot model directory".into());
     }
     if !fs::metadata(&candidate)
         .map_err(|e| e.to_string())?

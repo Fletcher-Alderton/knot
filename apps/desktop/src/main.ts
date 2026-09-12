@@ -51,7 +51,8 @@ const defaultColumns = ():ColumnInfo[] => [
 ];
 
 export type DueDateDisplay = 'calendar' | 'countdown';
-export const DUE_DATE_DISPLAY_STORAGE_KEY = 'irohmd.due-date-display';
+export const DUE_DATE_DISPLAY_STORAGE_KEY = 'knot.due-date-display';
+const LEGACY_DUE_DATE_DISPLAY_STORAGE_KEY = 'irohmd.due-date-display';
 
 interface CalendarDateParts { year:number; month:number; day:number }
 function parseCalendarDate(value:string):CalendarDateParts|null {
@@ -65,7 +66,10 @@ function parseCalendarDate(value:string):CalendarDateParts|null {
 }
 
 export function loadDueDateDisplayPreference():DueDateDisplay {
-  try{return window.localStorage.getItem(DUE_DATE_DISPLAY_STORAGE_KEY)==='countdown'?'countdown':'calendar';}
+  try{
+    const value=window.localStorage.getItem(DUE_DATE_DISPLAY_STORAGE_KEY)??window.localStorage.getItem(LEGACY_DUE_DATE_DISPLAY_STORAGE_KEY);
+    return value==='countdown'?'countdown':'calendar';
+  }
   catch{return 'calendar';}
 }
 export function saveDueDateDisplayPreference(display:DueDateDisplay):void {
@@ -172,7 +176,7 @@ export function setDirectoryPickerForTests(fn:DirectoryPicker|null){directoryPic
 
 export async function chooseBoardDirectory():Promise<string|null>{
   if(directoryPickerForTests)return directoryPickerForTests();
-  try{const {open}=await import('@tauri-apps/plugin-dialog');const selected=await open({directory:true,multiple:false,title:'Open or create an IrohMD board'});return typeof selected==='string'?selected:null;}
+  try{const {open}=await import('@tauri-apps/plugin-dialog');const selected=await open({directory:true,multiple:false,title:'Open or create a Knot board'});return typeof selected==='string'?selected:null;}
   catch{return null;}
 }
 
@@ -469,7 +473,7 @@ function labelsSettingsSection(){
   return `<section class="settings-section labels-settings" data-settings-section="labels" id="settings-labels" tabindex="-1"><div class="section-heading"><div><span class="eyebrow">BOARD</span><h2>Labels</h2><p>${state.boardPath?esc(state.boardTitle):'Open a board to manage its labels.'}</p></div></div><form id="create-label-form" class="label-create"><fieldset ${!state.boardPath?'disabled':''}><label>Name<input id="new-label-name" required maxlength="80" aria-label="New label name"/></label><label>Color<input id="new-label-color" type="color" value="#8b5cf6" aria-label="New label color"/></label><button class="primary" type="submit">Add label</button></fieldset></form><div class="label-list">${rows||'<p class="notice">No labels yet.</p>'}</div></section>`;
 }
 function syncSettingsSection(){return `<section class="settings-section sync-settings" data-settings-section="sync" id="settings-sync" tabindex="-1"><div class="section-heading"><div><span class="eyebrow">IROH</span><h2>Sync</h2><p>Keep this board in step with your other devices.</p></div><span class="status ${state.connected?'online':'offline'}"><i></i>${state.connected?'Connected':'Offline'}</span></div><div class="sync-actions"><div><strong>${state.boardPath?esc(state.boardTitle):'No board open'}</strong><span>${state.connected?'Connected to '+esc(state.peer):esc(state.peer)}</span></div><button class="secondary" id="pair" ${!state.boardPath?'disabled':''}>Pair device</button><button class="primary" id="sync" ${!state.boardPath||state.loading?'disabled':''}>${state.loading?'Syncing…':'Sync now'}</button></div><details class="advanced-settings device-details"><summary>Device details</summary><div class="device-grid"><div><span>Local endpoint</span><code title="${esc(state.endpointAddress)}">${state.endpointAddress?esc(state.endpointAddress):'Starting…'}</code><button class="text-button" id="copy-endpoint">Copy address</button></div><div><span>Board ID</span><code>${state.boardPath?esc(state.boardId):'Open a board to enable sync'}</code></div></div></details></section>`;}
-function settingsPage(){return `<section class="workspace settings" data-page="settings"><div class="settings-header"><span class="eyebrow">IROHMD</span><h1>Settings</h1></div><div class="settings-layout">${modelSettingsSection()}<div class="board-settings">${dueDateSettingsSection()}${labelsSettingsSection()}${syncSettingsSection()}</div></div></section>`;}
+function settingsPage(){return `<section class="workspace settings" data-page="settings"><div class="settings-header"><span class="eyebrow">KNOT</span><h1>Settings</h1></div><div class="settings-layout">${modelSettingsSection()}<div class="board-settings">${dueDateSettingsSection()}${labelsSettingsSection()}${syncSettingsSection()}</div></div></section>`;}
 
 
 let disposeCardDragging:(()=>void)|null=null;

@@ -7,7 +7,7 @@ The local language model is used only to parse quick-add text into a validated c
 ## Providers
 
 - Hugging Face GGUF: download a user-selected GGUF file from a Hugging Face repository and run it with llama-cpp-2.
-- Ollama: call the user’s local Ollama HTTP API; no model files are copied into IrohMD’s model directory.
+- Ollama: call the user’s local Ollama HTTP API; no model files are copied into Knot’s model directory.
 
 Hugging Face support means GGUF-compatible models. Arbitrary SafeTensors repositories are not interchangeable with llama.cpp.
 

@@ -21,7 +21,7 @@ Conventions shared with the application prompt:
 ```sh
 cargo build --release -p desktop --example quick_add_bench
 target/release/examples/quick_add_bench \
-  --model-path "$HOME/.config/irohmd/models/Qwen3.5-4B-Q4_K_M.gguf" \
+  --model-path "$HOME/.config/knot/models/Qwen3.5-4B-Q4_K_M.gguf" \
   --cases benchmarks/quick-add/cases.json \
   --mode warm --profile hybrid \
   --output benchmarks/quick-add/results/qwen35-4b-hybrid.jsonl

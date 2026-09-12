@@ -181,7 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0);
     let models_root = PathBuf::from(arg(&args, "--models-root").unwrap_or_else(|| {
         PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into()))
-            .join(".config/irohmd/models")
+            .join(".config/knot/models")
             .display()
             .to_string()
     }));

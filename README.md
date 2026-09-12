@@ -1,6 +1,6 @@
-# IrohMD
+# Knot
 
-IrohMD is a local-first Markdown Kanban desktop app. Boards remain ordinary Markdown files with YAML frontmatter on disk. Cards, immutable revisions, and deterministic merges work locally; peer-to-peer synchronization is provided through the Iroh transport layer.
+Knot is a local-first Markdown Kanban desktop app. Boards remain ordinary Markdown files with YAML frontmatter on disk. Cards, immutable revisions, and deterministic merges work locally; peer-to-peer synchronization is provided through the Iroh transport layer.
 
 > **Status:** v0.1 active development. The desktop application is usable for development and local testing, but packaged releases and cross-network synchronization still need real-device validation.
 

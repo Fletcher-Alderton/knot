@@ -215,19 +215,32 @@ pub struct ConflictResolutionInput {
     pub parent_revision_ids: Vec<String>,
 }
 fn config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("IROHMD_CONFIG_PATH")
+    if let Ok(p) = std::env::var("KNOT_CONFIG_PATH")
+        .or_else(|_| std::env::var("IROHMD_CONFIG_PATH"))
         .or_else(|_| std::env::var("KANBAN_CONFIG_PATH"))
         .or_else(|_| std::env::var("LUNA_CONFIG_PATH"))
     {
         return PathBuf::from(p);
     }
     if let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")) {
-        return PathBuf::from(base).join("IrohMD/install.json");
+        let knot = PathBuf::from(&base).join("Knot/install.json");
+        let legacy = PathBuf::from(base).join("IrohMD/install.json");
+        return if knot.exists() || !legacy.exists() {
+            knot
+        } else {
+            legacy
+        };
     }
-    std::env::var_os("HOME")
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(".config/irohmd/install.json")
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let knot = home.join(".config/knot/install.json");
+    let legacy = home.join(".config/irohmd/install.json");
+    if knot.exists() || !legacy.exists() {
+        knot
+    } else {
+        legacy
+    }
 }
 fn load_config() -> InstallConfig {
     let p = config_path();
@@ -236,8 +249,9 @@ fn load_config() -> InstallConfig {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_else(|| InstallConfig {
             device_id: ulid::Ulid::new().to_string(),
-            device_name: std::env::var("KANBAN_DEVICE_NAME")
-                .unwrap_or_else(|_| "IrohMD Desktop".into()),
+            device_name: std::env::var("KNOT_DEVICE_NAME")
+                .or_else(|_| std::env::var("KANBAN_DEVICE_NAME"))
+                .unwrap_or_else(|_| "Knot Desktop".into()),
             secret_key: None,
             peers: HashMap::new(),
         })

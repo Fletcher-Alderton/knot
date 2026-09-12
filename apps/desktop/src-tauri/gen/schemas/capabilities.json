@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default IrohMD desktop permissions","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}
+{"default":{"identifier":"default","description":"Default Knot desktop permissions","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}

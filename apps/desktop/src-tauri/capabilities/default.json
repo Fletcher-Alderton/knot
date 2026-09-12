@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default IrohMD desktop permissions",
+  "description": "Default Knot desktop permissions",
   "windows": ["main"],
   "permissions": [
     "core:default",
