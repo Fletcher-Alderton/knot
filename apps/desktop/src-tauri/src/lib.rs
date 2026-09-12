@@ -844,7 +844,17 @@ fn revision_key(root: &Path, id: &str) -> String {
     format!("{}\0{}", root.to_string_lossy(), id)
 }
 
-static CARD_IO: Mutex<()> = Mutex::new(());
+static BOARD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+
+fn board_lock(path: &Path) -> Arc<Mutex<()>> {
+    let key = key(&path.to_string_lossy());
+    let registry = BOARD_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry.lock().unwrap_or_else(|e| e.into_inner());
+    locks
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 fn tracked_write(store: &mut FsBoardStore, id: &str, markdown: &str) -> Result<(), String> {
     let old = store.card_path(id).ok();
@@ -861,7 +871,8 @@ fn tracked_write(store: &mut FsBoardStore, id: &str, markdown: &str) -> Result<(
 }
 
 fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
-    let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
+    let board_mutex = board_lock(root);
+    let _io = board_mutex.lock().unwrap_or_else(|e| e.into_inner());
     let is_card = path
         .parent()
         .and_then(|p| p.file_name())
@@ -1020,7 +1031,8 @@ fn with_mutation(
     input: CardInput,
     parent_override: Option<Vec<String>>,
 ) -> Result<CardInfo, String> {
-    let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
+    let board_mutex = board_lock(Path::new(path));
+    let _io = board_mutex.lock().unwrap_or_else(|e| e.into_inner());
     for (name, value) in [
         ("due", input.due.as_deref()),
         ("start", input.start.as_deref()),
@@ -1229,7 +1241,8 @@ fn load_repo(path: &str) -> Result<MemoryRevisionRepository, String> {
     Ok(repo)
 }
 fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, String> {
-    let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
+    let board_mutex = board_lock(Path::new(path));
+    let _io = board_mutex.lock().unwrap_or_else(|e| e.into_inner());
     let mut n = 0;
     let mut store = board(path)?;
     let all = repo.all();
@@ -1853,7 +1866,8 @@ mod commands {
                 .ok_or_else(|| "manual resolution payload is required".to_string())?,
             _ => return Err("choice must be local, remote, or manual".into()),
         };
-        let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
+        let board_mutex = board_lock(Path::new(&path));
+        let _io = board_mutex.lock().unwrap_or_else(|e| e.into_inner());
         let mut store = board(&path)?;
         let old = store.read_card(&id).ok();
         if resolution.tombstone {
@@ -2006,7 +2020,8 @@ mod commands {
 
     #[tauri::command]
     pub fn delete_card(path: String, id: String) -> Result<bool, String> {
-        let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
+        let board_mutex = board_lock(Path::new(&path));
+        let _io = board_mutex.lock().unwrap_or_else(|e| e.into_inner());
         let mut s = board(&path)?;
         let old = s.read_card(&id).map_err(|e| e.to_string())?;
         let parsed = Card::parse(&old).map_err(|e| e.to_string())?;

@@ -11,6 +11,7 @@ use ulid::Ulid;
 
 pub const PROTOCOL_VERSION: u16 = 1;
 const MAX_MESSAGE: usize = 4 * 1024 * 1024;
+const MAX_PENDING_REVISIONS: usize = 10_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Revision {
@@ -641,7 +642,14 @@ async fn receive_revisions<T: PeerTransport, R: RevisionRepository>(
     let mut pending = Vec::new();
     loop {
         match transport.recv().await?.message {
-            Message::RevisionResponse(response) => pending.push(response.revision),
+            Message::RevisionResponse(response) => {
+                if pending.len() >= MAX_PENDING_REVISIONS {
+                    return Err(SyncError::Transport(TransportError::Protocol(
+                        ProtocolError::TooLarge,
+                    )));
+                }
+                pending.push(response.revision);
+            }
             Message::Ack(a) if a.revision_id == "sync-complete" => {
                 // Import topologically so valid responses may arrive in any order.
                 loop {
@@ -974,5 +982,38 @@ THREE",
         d.trust("peer");
         d.authorize_board("board");
         assert!(!d.authorized_boards.contains("/tmp/board"));
+    }
+    #[tokio::test]
+    async fn receive_revisions_caps_pending_buffer() {
+        let (mut at, mut bt) = InMemoryTransport::pair(4);
+        let repo = Arc::new(Mutex::new(MemoryRevisionRepository::new("board")));
+        let sender = tokio::spawn(async move {
+            for i in 0..=MAX_PENDING_REVISIONS {
+                let r = Revision {
+                    id: format!("rev-{i}"),
+                    card_id: "card".into(),
+                    parents: vec![],
+                    content: card(&format!("title-{i}"), None, "body"),
+                    tombstone: false,
+                };
+                if at
+                    .send(WireMessage::new(Message::RevisionResponse(
+                        RevisionResponse { revision: r },
+                    )))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let res = receive_revisions(&mut bt, &repo).await;
+        assert!(matches!(
+            res,
+            Err(SyncError::Transport(TransportError::Protocol(
+                ProtocolError::TooLarge
+            )))
+        ));
+        let _ = sender.await;
     }
 }
