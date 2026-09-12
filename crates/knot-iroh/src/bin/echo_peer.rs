@@ -92,6 +92,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    if env::var("EXIT_AFTER_ADDR").is_ok() {
+        println!("EXIT_AFTER_ADDR set, shutting down...");
+        transport.endpoint().close().await;
+        return Ok(());
+    }
+
     println!("Listening for incoming peer connections (Press Ctrl+C to stop)...");
     loop {
         match transport.accept_connected().await {
