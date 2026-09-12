@@ -12,3 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 iroh = "1.1"
 knot-sync = { path = "../knot-sync" }
+
+[[bin]]
+name = "knot-peer-echo"
+path = "src/bin/echo_peer.rs"
