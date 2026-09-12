@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let maybe_target = args.get(1);
 
-    // Bind transport
+    // Bind transport with production relay presets
     let transport = if let Some(key) = find_config_key() {
         IrohTransport::bind_with_secret_key(key).await?
     } else {
@@ -50,8 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("Local Endpoint ID: {}", transport.endpoint_id());
-    println!("Discovering addresses and connecting to relay...");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    println!("Waiting 5s for relay connection and STUN address discovery...");
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     let addr = transport.endpoint().addr();
     let addr_json = serde_json::to_string(&addr)?;
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_clone = transport.clone();
         tokio::spawn(async move {
             match tokio::time::timeout(
-                Duration::from_secs(15),
+                Duration::from_secs(20),
                 ConnectedIrohTransport::connect(t_clone.clone(), target_addr),
             )
             .await
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
                 Ok(Err(e)) => println!("\n>>> Outbound connection error: {:?}", e),
-                Err(_) => println!("\n>>> Outbound connection timed out after 15s."),
+                Err(_) => println!("\n>>> Outbound connection timed out after 20s."),
             }
         });
     }
