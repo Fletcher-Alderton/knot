@@ -321,7 +321,7 @@ export function bindCardDragging(
       if (transfer) {
         transfer.effectAllowed = "move";
         transfer.setData("text/plain", nativeId);
-        transfer.setData("application/x-irohmd-card", nativeId);
+        transfer.setData("application/x-knot-card", nativeId);
       }
     });
     listen(card, "dragend", () => clearNative());

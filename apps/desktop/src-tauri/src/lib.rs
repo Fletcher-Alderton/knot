@@ -1,19 +1,20 @@
 #![cfg_attr(test, allow(dead_code, unused_imports))]
 use iroh::{EndpointAddr, EndpointId};
-use kanban_core::{Card, CardFrontmatter, SyncMetadata};
-use kanban_iroh::{
+use knot_core::{Card, CardFrontmatter, SyncMetadata};
+use knot_iroh::{
     ConnectedIrohTransport, IrohTransport, generate_secret_key, secret_key_from_bytes,
     secret_key_to_bytes,
 };
-use kanban_revisions::{Revision, snapshot, tombstone};
-use kanban_store::{BoardStore, FsBoardStore};
-use kanban_sync::{DeviceIdentity, MemoryRevisionRepository, RevisionRepository};
+use knot_revisions::{Revision, snapshot, tombstone};
+use knot_store::{BoardStore, FsBoardStore};
+use knot_sync::{DeviceIdentity, MemoryRevisionRepository, RevisionRepository};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
@@ -171,10 +172,22 @@ pub struct EndpointInfo {
     pub address: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConflict {
+    pub card_id: String,
+    pub local_revision_id: String,
+    pub remote_revision_id: String,
+    pub parent_revision_ids: Vec<String>,
+    pub local: Option<CardInfo>,
+    pub remote: Option<CardInfo>,
+    pub local_tombstone: bool,
+    pub remote_tombstone: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: String,
     pub transferred: usize,
     pub received: usize,
+    pub conflicts: Vec<SyncConflict>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct InstallPeer {
@@ -212,35 +225,28 @@ pub struct ConflictResolutionInput {
     pub local: CardInput,
     pub remote: CardInput,
     pub manual: Option<CardInput>,
+    #[serde(default)]
+    pub tombstone: bool,
     pub parent_revision_ids: Vec<String>,
 }
+fn valid_revision_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
 fn config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("KNOT_CONFIG_PATH")
-        .or_else(|_| std::env::var("IROHMD_CONFIG_PATH"))
-        .or_else(|_| std::env::var("KANBAN_CONFIG_PATH"))
-        .or_else(|_| std::env::var("LUNA_CONFIG_PATH"))
-    {
+    if let Ok(p) = std::env::var("KNOT_CONFIG_PATH") {
         return PathBuf::from(p);
     }
     if let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")) {
-        let knot = PathBuf::from(&base).join("Knot/install.json");
-        let legacy = PathBuf::from(base).join("IrohMD/install.json");
-        return if knot.exists() || !legacy.exists() {
-            knot
-        } else {
-            legacy
-        };
+        return PathBuf::from(base).join("Knot/install.json");
     }
-    let home = std::env::var_os("HOME")
+    std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let knot = home.join(".config/knot/install.json");
-    let legacy = home.join(".config/irohmd/install.json");
-    if knot.exists() || !legacy.exists() {
-        knot
-    } else {
-        legacy
-    }
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join(".config/knot/install.json")
 }
 fn load_config() -> InstallConfig {
     let p = config_path();
@@ -250,19 +256,65 @@ fn load_config() -> InstallConfig {
         .unwrap_or_else(|| InstallConfig {
             device_id: ulid::Ulid::new().to_string(),
             device_name: std::env::var("KNOT_DEVICE_NAME")
-                .or_else(|_| std::env::var("KANBAN_DEVICE_NAME"))
                 .unwrap_or_else(|_| "Knot Desktop".into()),
             secret_key: None,
             peers: HashMap::new(),
         })
 }
-fn save_config(c: &InstallConfig) -> Result<(), String> {
-    let p = config_path();
-    if let Some(parent) = p.parent() {
+fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(&p, serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?)
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let temporary = path.with_file_name(format!(".{name}.{}.tmp", ulid::Ulid::new()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
         .map_err(|e| e.to_string())?;
+    file.write_all(bytes).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    #[cfg(windows)]
+    if path.exists() {
+        let backup = path.with_file_name(format!(".{name}.{}.backup", ulid::Ulid::new()));
+        fs::copy(path, &backup).map_err(|e| e.to_string())?;
+        if let Err(error) = fs::remove_file(path) {
+            let _ = fs::remove_file(&backup);
+            let _ = fs::remove_file(&temporary);
+            return Err(error.to_string());
+        }
+        return match fs::rename(&temporary, path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup);
+                Ok(())
+            }
+            Err(error) => {
+                let restore = fs::rename(&backup, path);
+                let _ = fs::remove_file(&temporary);
+                match restore {
+                    Ok(()) => Err(error.to_string()),
+                    Err(restore_error) => Err(format!(
+                        "replacement failed: {error}; restore failed: {restore_error}"
+                    )),
+                }
+            }
+        };
+    }
+    fs::rename(&temporary, path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        error.to_string()
+    })
+}
+fn save_config(c: &InstallConfig) -> Result<(), String> {
+    let p = config_path();
+    atomic_write_bytes(
+        &p,
+        &serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?,
+    )?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -391,9 +443,9 @@ fn save_store(path: &str, store: FsBoardStore) {
 fn board_identity(path: &Path) -> Result<String, String> {
     let metadata = path.join("board.md");
     let text = fs::read_to_string(&metadata).map_err(|e| e.to_string())?;
-    let mut parsed = kanban_core::Board::parse(&text).map_err(|e| e.to_string())?;
+    let mut parsed = knot_core::Board::parse(&text).map_err(|e| e.to_string())?;
     if let Some(id) = parsed.metadata.get("id").and_then(|v| v.as_str())
-        && kanban_core::validate_ulid(id)
+        && knot_core::validate_ulid(id)
     {
         return Ok(id.to_string());
     }
@@ -404,8 +456,10 @@ fn board_identity(path: &Path) -> Result<String, String> {
     parsed
         .metadata
         .insert("id".into(), serde_yaml::Value::String(id.clone()));
-    fs::write(metadata, parsed.to_markdown().map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    atomic_write_bytes(
+        &metadata,
+        parsed.to_markdown().map_err(|e| e.to_string())?.as_bytes(),
+    )?;
     Ok(id)
 }
 fn default_columns() -> Vec<BoardColumn> {
@@ -427,13 +481,13 @@ fn default_columns() -> Vec<BoardColumn> {
         },
     ]
 }
-fn board_metadata(path: &Path) -> Result<(kanban_core::Board, String, Vec<BoardColumn>), String> {
+fn board_metadata(path: &Path) -> Result<(knot_core::Board, String, Vec<BoardColumn>), String> {
     let file = path.join("board.md");
     let text = fs::read_to_string(&file).map_err(|e| e.to_string())?;
-    let mut b = kanban_core::Board::parse(&text).map_err(|e| e.to_string())?;
+    let mut b = knot_core::Board::parse(&text).map_err(|e| e.to_string())?;
     let mut changed = false;
     let id = match b.metadata.get("id").and_then(|v| v.as_str()) {
-        Some(id) if kanban_core::validate_ulid(id) => id.to_string(),
+        Some(id) if knot_core::validate_ulid(id) => id.to_string(),
         Some(_) => return Err("board id must be a valid ULID".into()),
         None => {
             let id = ulid::Ulid::new().to_string();
@@ -467,7 +521,10 @@ fn board_metadata(path: &Path) -> Result<(kanban_core::Board, String, Vec<BoardC
         changed = true;
     }
     if changed {
-        fs::write(&file, b.to_markdown().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        atomic_write_bytes(
+            &file,
+            b.to_markdown().map_err(|e| e.to_string())?.as_bytes(),
+        )?;
     }
     Ok((b, id, columns))
 }
@@ -494,14 +551,17 @@ fn inspect(path: String) -> Result<BoardInfo, String> {
 }
 fn save_board_metadata(
     path: &str,
-    mut f: impl FnMut(&mut kanban_core::Board) -> Result<(), String>,
+    mut f: impl FnMut(&mut knot_core::Board) -> Result<(), String>,
 ) -> Result<BoardInfo, String> {
     board_metadata(Path::new(path))?;
     let file = Path::new(path).join("board.md");
     let text = fs::read_to_string(&file).map_err(|e| e.to_string())?;
-    let mut b = kanban_core::Board::parse(&text).map_err(|e| e.to_string())?;
+    let mut b = knot_core::Board::parse(&text).map_err(|e| e.to_string())?;
     f(&mut b)?;
-    fs::write(file, b.to_markdown().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    atomic_write_bytes(
+        &file,
+        b.to_markdown().map_err(|e| e.to_string())?.as_bytes(),
+    )?;
     inspect(path.to_string())
 }
 fn slug(name: &str) -> String {
@@ -548,28 +608,185 @@ fn revision() -> String {
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
+fn revisions_dir(root: &Path) -> Result<PathBuf, String> {
+    let knot = root.join(".knot");
+    for path in [&knot, &knot.join("revisions")] {
+        if let Ok(metadata) = fs::symlink_metadata(path)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(format!(
+                "refusing symlinked revision path: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(knot.join("revisions"))
+}
+fn validate_revision_record(r: &Revision) -> Result<(), String> {
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 200
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    };
+    if !safe(&r.revision_id)
+        || !safe(&r.card_id)
+        || r.parents.iter().any(|parent| !safe(parent))
+        || (r.tombstone && r.snapshot.is_some())
+        || (!r.tombstone
+            && r.snapshot
+                .as_deref()
+                .map(|body| match knot_core::Card::parse(body) {
+                    Ok(card) => card.frontmatter.id != r.card_id,
+                    Err(_) => true,
+                })
+                .unwrap_or(true))
+        || r.content_hash != knot_revisions::content_hash(r.snapshot.as_deref(), r.tombstone)
+    {
+        return Err(format!("invalid revision record: {}", r.revision_id));
+    }
+    Ok(())
+}
+fn revision_has_cycle(
+    id: &str,
+    parents: &HashMap<String, Vec<String>>,
+    visiting: &mut std::collections::HashSet<String>,
+    visited: &mut std::collections::HashSet<String>,
+) -> bool {
+    if visiting.contains(id) {
+        return true;
+    }
+    if !visited.insert(id.to_string()) {
+        return false;
+    }
+    visiting.insert(id.to_string());
+    let cycle = parents
+        .get(id)
+        .into_iter()
+        .flatten()
+        .any(|parent| revision_has_cycle(parent, parents, visiting, visited));
+    visiting.remove(id);
+    cycle
+}
+fn validate_revision_graph(revisions: &[Revision]) -> Result<(), String> {
+    let mut by_id = HashMap::new();
+    for revision in revisions {
+        if by_id.insert(&revision.revision_id, revision).is_some() {
+            return Err(format!("duplicate revision ID: {}", revision.revision_id));
+        }
+    }
+    let mut parents_by_id = HashMap::new();
+    for revision in revisions {
+        let mut parents = std::collections::HashSet::new();
+        for parent_id in &revision.parents {
+            if !parents.insert(parent_id) || parent_id == &revision.revision_id {
+                return Err(format!(
+                    "invalid parents for revision {}",
+                    revision.revision_id
+                ));
+            }
+            let parent = by_id.get(parent_id).ok_or_else(|| {
+                format!("missing parent {parent_id} for {}", revision.revision_id)
+            })?;
+            if parent.card_id != revision.card_id {
+                return Err(format!("parent card mismatch for {}", revision.revision_id));
+            }
+        }
+        parents_by_id.insert(revision.revision_id.clone(), revision.parents.clone());
+    }
+    let mut visiting = std::collections::HashSet::new();
+    let mut visited = std::collections::HashSet::new();
+    if parents_by_id
+        .keys()
+        .any(|id| revision_has_cycle(id, &parents_by_id, &mut visiting, &mut visited))
+    {
+        return Err("revision graph contains a cycle".into());
+    }
+    Ok(())
+}
 fn persist_revision(root: &Path, r: &Revision) -> Result<(), String> {
-    let d = root.join(".kanban/revisions");
+    validate_revision_record(r)?;
+    let d = revisions_dir(root)?;
     fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    for parent_id in &r.parents {
+        let parent_path = d.join(format!("{parent_id}.json"));
+        let bytes = fs::read(&parent_path)
+            .map_err(|_| format!("missing parent {parent_id} for {}", r.revision_id))?;
+        let parent: Revision = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("{}: {e}", parent_path.display()))?;
+        validate_revision_record(&parent)?;
+        if parent.card_id != r.card_id {
+            return Err(format!("parent card mismatch for {}", r.revision_id));
+        }
+    }
     let p = d.join(format!("{}.json", r.revision_id));
-    if !p.exists() {
-        fs::write(p, serde_json::to_vec_pretty(r).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+    match fs::symlink_metadata(&p) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(format!("refusing symlinked revision file: {}", p.display()));
+        }
+        Ok(_) => {
+            let existing =
+                serde_json::from_slice::<Revision>(&fs::read(&p).map_err(|e| e.to_string())?)
+                    .map_err(|e| format!("{}: {e}", p.display()))?;
+            validate_revision_record(&existing)?;
+            if existing != *r {
+                return Err(format!("revision ID collision: {}", r.revision_id));
+            }
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    let bytes = serde_json::to_vec_pretty(r).map_err(|e| e.to_string())?;
+    let temporary = d.join(format!(".{}.{}.tmp", r.revision_id, ulid::Ulid::new()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    if let Err(error) = fs::rename(&temporary, &p) {
+        let _ = fs::remove_file(&temporary);
+        if fs::symlink_metadata(&p).is_ok() {
+            return Ok(());
+        }
+        return Err(error.to_string());
     }
     Ok(())
 }
 fn load_revisions(path: &str) -> Result<Vec<Revision>, String> {
-    let directory = Path::new(path).join(".kanban/revisions");
+    let directory = revisions_dir(Path::new(path))?;
     if !directory.is_dir() {
         return Ok(Vec::new());
     }
-    let revisions = fs::read_dir(directory)
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .filter(|entry| entry.path().extension().and_then(|x| x.to_str()) == Some("json"))
-        .filter_map(|entry| fs::read(entry.path()).ok())
-        .filter_map(|bytes| serde_json::from_slice::<Revision>(&bytes).ok())
-        .collect();
+    let mut revisions = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.path().extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let path = entry.path();
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "refusing symlinked revision file: {}",
+                path.display()
+            ));
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let revision = serde_json::from_slice::<Revision>(&bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        validate_revision_record(&revision)?;
+        revisions.push(revision);
+    }
+    validate_revision_graph(&revisions)?;
     Ok(revisions)
 }
 fn archived_cards(path: &str) -> Result<Vec<ArchivedCard>, String> {
@@ -724,11 +941,20 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
                             .ok()
                             .and_then(|store| store.card_path(&id).ok())
                             .and_then(|path| fs::read_to_string(path).ok());
-                        let parents = old
-                            .as_deref()
-                            .and_then(|s| Card::parse(s).ok())
-                            .and_then(|c| c.frontmatter.sync)
-                            .and_then(|s| s.revision)
+                        let revision_key = revision_key(root, &id);
+                        let known_parent = runtime()
+                            .lock()
+                            .unwrap()
+                            .last_revisions
+                            .get(&revision_key)
+                            .cloned();
+                        let parents = known_parent
+                            .or_else(|| {
+                                old.as_deref()
+                                    .and_then(|s| Card::parse(s).ok())
+                                    .and_then(|c| c.frontmatter.sync)
+                                    .and_then(|s| s.revision)
+                            })
                             .into_iter()
                             .collect();
                         let rev = snapshot(
@@ -739,12 +965,13 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
                             text,
                         );
                         let rid = rev.revision_id.clone();
-                        let _ = persist_revision(root, &rev);
-                        runtime()
-                            .lock()
-                            .unwrap()
-                            .last_revisions
-                            .insert(revision_key(root, &id), rid);
+                        if persist_revision(root, &rev).is_ok() {
+                            runtime()
+                                .lock()
+                                .unwrap()
+                                .last_revisions
+                                .insert(revision_key, rid);
+                        }
                     }
                 }
             }
@@ -752,7 +979,7 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
     } else if matches!(kind, EventKind::Remove(_))
         && let Some(stem) = path.file_stem().and_then(|x| x.to_str())
     {
-        let id = kanban_store::extract_card_id(stem);
+        let id = knot_store::extract_card_id(stem);
         let self_delete = runtime().lock().unwrap().self_deletes.remove(&path_string);
         if self_delete {
             return;
@@ -770,12 +997,13 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
             chrono::Utc::now().timestamp() as u64,
         );
         let rid = rev.revision_id.clone();
-        let _ = persist_revision(root, &rev);
-        runtime()
-            .lock()
-            .unwrap()
-            .last_revisions
-            .insert(revision_key(root, id), rid);
+        if persist_revision(root, &rev).is_ok() {
+            runtime()
+                .lock()
+                .unwrap()
+                .last_revisions
+                .insert(revision_key(root, id), rid);
+        }
     }
     runtime().lock().unwrap().events.push_back(WatchEvent {
         path: path_string,
@@ -859,6 +1087,7 @@ fn with_mutation(
     }
     .to_markdown()
     .map_err(|e| e.to_string())?;
+    let previous = s.read_card(id).ok();
     tracked_write(&mut s, id, &md)?;
     let canonical_root = Path::new(path)
         .canonicalize()
@@ -889,7 +1118,26 @@ fn with_mutation(
         chrono::Utc::now().timestamp() as u64,
         md.clone(),
     );
-    persist_revision(Path::new(path), &rev)?;
+    if let Err(error) = persist_revision(Path::new(path), &rev) {
+        if let Some(previous) = previous {
+            let _ = tracked_write(&mut s, id, &previous);
+        } else {
+            let _ = s.delete_card(id);
+        }
+        let _ = runtime().lock().unwrap().self_hashes.remove(
+            &canonical_root
+                .join("cards")
+                .join(
+                    s.card_path(id)
+                        .ok()
+                        .and_then(|path| path.file_name().map(|name| name.to_owned()))
+                        .unwrap_or_default(),
+                )
+                .to_string_lossy()
+                .into_owned(),
+        );
+        return Err(error);
+    }
     runtime()
         .lock()
         .unwrap()
@@ -961,7 +1209,7 @@ fn start_listener(transport: IrohTransport) {
             identity.endpoint_id = transport.endpoint_id().to_string();
             identity.trust(remote.clone());
             identity.authorize_board(board_id.clone());
-            if kanban_sync::sync_once(&mut wire, shared.clone(), &identity, &remote, &board_id)
+            if knot_sync::sync_once(&mut wire, shared.clone(), &identity, &remote, &board_id)
                 .await
                 .is_ok()
                 && let Ok(repo) = Arc::try_unwrap(shared)
@@ -975,17 +1223,8 @@ fn start_listener(transport: IrohTransport) {
 }
 fn load_repo(path: &str) -> Result<MemoryRevisionRepository, String> {
     let mut repo = MemoryRevisionRepository::new(board_identity(Path::new(path))?);
-    let d = Path::new(path).join(".kanban/revisions");
-    if d.is_dir() {
-        for e in fs::read_dir(d).map_err(|e| e.to_string())?.flatten() {
-            if e.path().extension().and_then(|x| x.to_str()) == Some("json")
-                && let Ok(r) = serde_json::from_slice::<Revision>(
-                    &fs::read(e.path()).map_err(|x| x.to_string())?,
-                )
-            {
-                repo.add(kanban_sync::Revision::from_domain(&r));
-            }
-        }
+    for revision in load_revisions(path)? {
+        repo.add(knot_sync::Revision::from_domain(&revision));
     }
     Ok(repo)
 }
@@ -994,14 +1233,27 @@ fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, Str
     let mut n = 0;
     let mut store = board(path)?;
     let all = repo.all();
-    for revision in &all {
-        persist_revision(
-            Path::new(path),
-            &revision.to_domain(chrono::Utc::now().timestamp() as u64),
-        )?;
+    let mut pending: Vec<_> = all
+        .iter()
+        .map(|revision| revision.to_domain(chrono::Utc::now().timestamp() as u64))
+        .collect();
+    while !pending.is_empty() {
+        let mut progress = false;
+        let mut remaining = Vec::new();
+        for revision in pending {
+            match persist_revision(Path::new(path), &revision) {
+                Ok(()) => progress = true,
+                Err(error) if error.contains("missing parent") => remaining.push(revision),
+                Err(error) => return Err(error),
+            }
+        }
+        if !progress {
+            return Err("unable to persist revision graph in parent order".into());
+        }
+        pending = remaining;
     }
     let heads: std::collections::HashSet<_> = repo.heads().into_iter().collect();
-    let mut by_card: HashMap<String, Vec<kanban_sync::Revision>> = HashMap::new();
+    let mut by_card: HashMap<String, Vec<knot_sync::Revision>> = HashMap::new();
     for r in all.into_iter().filter(|r| heads.contains(&r.id)) {
         by_card.entry(r.card_id.clone()).or_default().push(r);
     }
@@ -1009,18 +1261,31 @@ fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, Str
         let d = revisions[0].to_domain(chrono::Utc::now().timestamp() as u64);
         if d.tombstone {
             if store.read_card(&d.card_id).is_ok() {
-                if let Ok(path) = store.card_path(&d.card_id) {
-                    runtime()
-                        .lock()
-                        .unwrap()
-                        .self_deletes
-                        .insert(path.to_string_lossy().into_owned());
+                let deleted_path = store
+                    .card_path(&d.card_id)
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned());
+                if let Some(path) = &deleted_path {
+                    runtime().lock().unwrap().self_deletes.insert(path.clone());
                 }
-                let _ = store.delete_card(&d.card_id);
+                if let Err(error) = store.delete_card(&d.card_id) {
+                    if let Some(path) = deleted_path {
+                        runtime().lock().unwrap().self_deletes.remove(&path);
+                    }
+                    return Err(error.to_string());
+                }
                 n += 1;
             }
+            runtime().lock().unwrap().last_revisions.insert(
+                revision_key(Path::new(path), &d.card_id),
+                d.revision_id.clone(),
+            );
         } else if let Some(s) = d.snapshot {
             tracked_write(&mut store, &d.card_id, &s)?;
+            runtime().lock().unwrap().last_revisions.insert(
+                revision_key(Path::new(path), &d.card_id),
+                d.revision_id.clone(),
+            );
             n += 1;
         }
     }
@@ -1279,15 +1544,22 @@ mod commands {
         fs::create_dir_all(p.join("cards")).map_err(|e| e.to_string())?;
         let b = p.join("board.md");
         if !b.exists() {
-            fs::write(
-                &b,
-                "---
-title: My board
----
-
-",
-            )
-            .map_err(|e| e.to_string())?;
+            let temporary = p.join(format!(".board.{}.tmp", ulid::Ulid::new()));
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|e| e.to_string())?;
+            file.write_all(b"---\ntitle: My board\n---\n\n")
+                .map_err(|e| e.to_string())?;
+            file.sync_all().map_err(|e| e.to_string())?;
+            drop(file);
+            if let Err(error) = fs::rename(&temporary, &b) {
+                let _ = fs::remove_file(&temporary);
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(error.to_string());
+                }
+            }
         }
         inspect(path)
     }
@@ -1561,13 +1833,13 @@ title: My board
             || resolution
                 .parent_revision_ids
                 .iter()
-                .any(|p| !kanban_core::validate_ulid(p))
+                .any(|p| !valid_revision_id(p))
         {
             return Err(
                 "conflict resolution requires two distinct valid parent revision IDs".into(),
             );
         }
-        let revisions_dir = Path::new(&path).join(".kanban/revisions");
+        let revisions_dir = revisions_dir(Path::new(&path))?;
         for parent in &resolution.parent_revision_ids {
             if !revisions_dir.join(format!("{parent}.json")).is_file() {
                 return Err(format!("parent revision not found: {parent}"));
@@ -1583,7 +1855,68 @@ title: My board
         };
         let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
         let mut store = board(&path)?;
-        let old = store.read_card(&id).map_err(|e| e.to_string())?;
+        let old = store.read_card(&id).ok();
+        if resolution.tombstone {
+            let deleted_info = CardInfo {
+                id: id.clone(),
+                title: selected.title.clone(),
+                body: selected.body.clone(),
+                column: selected.column.clone(),
+                position: selected.position.unwrap_or(1000),
+                labels: selected.labels.clone(),
+                label_colors: selected.label_colors.clone(),
+                due: selected.due.clone(),
+                start: selected.start.clone(),
+                updated_at: None,
+                revision: None,
+            };
+            let revision_id = revision();
+            let rev = tombstone(
+                revision_id,
+                id.clone(),
+                resolution.parent_revision_ids.clone(),
+                chrono::Utc::now().timestamp() as u64,
+            );
+            let deleted_path = store
+                .card_path(&id)
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
+            if let Some(deleted_path) = &deleted_path {
+                runtime()
+                    .lock()
+                    .unwrap()
+                    .self_deletes
+                    .insert(deleted_path.clone());
+            }
+            if deleted_path.is_some()
+                && let Err(error) = store.delete_card(&id)
+            {
+                if let Some(deleted_path) = &deleted_path {
+                    runtime().lock().unwrap().self_deletes.remove(deleted_path);
+                }
+                return Err(error.to_string());
+            }
+            if let Err(error) = persist_revision(Path::new(&path), &rev) {
+                if let Some(old) = &old {
+                    let _ = tracked_write(&mut store, &id, old);
+                }
+                if let Some(deleted_path) = &deleted_path {
+                    runtime().lock().unwrap().self_deletes.remove(deleted_path);
+                }
+                return Err(error);
+            }
+            runtime()
+                .lock()
+                .unwrap()
+                .last_revisions
+                .insert(revision_key(Path::new(&path), &id), rev.revision_id.clone());
+            save_store(&path, store);
+            return Ok(old
+                .as_deref()
+                .and_then(|markdown| card_info(id.clone(), markdown).ok())
+                .unwrap_or(deleted_info));
+        }
+        let old = old.ok_or_else(|| "card not found".to_string())?;
         let mut fm = Card::parse(&old).map_err(|e| e.to_string())?.frontmatter;
         fm.title = selected.title;
         fm.column = selected.column;
@@ -1623,7 +1956,15 @@ title: My board
             chrono::Utc::now().timestamp() as u64,
             markdown.clone(),
         );
-        persist_revision(Path::new(&path), &rev)?;
+        if let Err(error) = persist_revision(Path::new(&path), &rev) {
+            let _ = tracked_write(&mut store, &id, &old);
+            return Err(error);
+        }
+        runtime()
+            .lock()
+            .unwrap()
+            .last_revisions
+            .insert(revision_key(Path::new(&path), &id), rev.revision_id.clone());
         save_store(&path, store);
         card_info(id, &markdown)
     }
@@ -1654,7 +1995,7 @@ title: My board
     /// Return the canonical absolute filesystem path for a card.
     #[tauri::command]
     pub fn share_path(path: String, id: String) -> Result<String, String> {
-        if !kanban_core::validate_ulid(&id) {
+        if !knot_core::validate_ulid(&id) {
             return Err("card id must be a valid ULID".into());
         }
         let root = Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
@@ -1681,13 +2022,25 @@ title: My board
             parents,
             chrono::Utc::now().timestamp() as u64,
         );
-        persist_revision(Path::new(&path), &rev)?;
         let delete_path = s
             .card_path(&id)
-            .unwrap_or_else(|_| Path::new(&path).join("cards").join(format!("{id}.md")))
+            .map_err(|e| e.to_string())?
             .to_string_lossy()
             .into_owned();
-        runtime().lock().unwrap().self_deletes.insert(delete_path);
+        runtime()
+            .lock()
+            .unwrap()
+            .self_deletes
+            .insert(delete_path.clone());
+        if let Err(error) = s.delete_card(&id) {
+            runtime().lock().unwrap().self_deletes.remove(&delete_path);
+            return Err(error.to_string());
+        }
+        if let Err(error) = persist_revision(Path::new(&path), &rev) {
+            let _ = tracked_write(&mut s, &id, &old);
+            runtime().lock().unwrap().self_deletes.remove(&delete_path);
+            return Err(error);
+        }
         runtime().lock().unwrap().last_revisions.insert(
             revision_key(
                 &Path::new(&path)
@@ -1697,7 +2050,6 @@ title: My board
             ),
             rev.revision_id.clone(),
         );
-        s.delete_card(&id).map_err(|e| e.to_string())?;
         save_store(&path, s);
         Ok(true)
     }
@@ -1706,6 +2058,31 @@ title: My board
         let root = PathBuf::from(&path);
         if !root.is_dir() {
             return Err("board folder does not exist".into());
+        }
+        if let Ok(revisions) = load_revisions(&path) {
+            let parents: std::collections::HashSet<String> = revisions
+                .iter()
+                .flat_map(|revision| revision.parents.iter().cloned())
+                .collect();
+            let mut heads: HashMap<String, String> = HashMap::new();
+            for revision in revisions {
+                if !parents.contains(&revision.revision_id) {
+                    heads
+                        .entry(revision.card_id.clone())
+                        .and_modify(|current| {
+                            if revision.revision_id > *current {
+                                *current = revision.revision_id.clone();
+                            }
+                        })
+                        .or_insert(revision.revision_id);
+                }
+            }
+            let mut runtime = runtime().lock().unwrap();
+            for (card_id, revision_id) in heads {
+                runtime
+                    .last_revisions
+                    .insert(revision_key(&root, &card_id), revision_id);
+            }
         }
         let watch_key = root
             .canonicalize()
@@ -1784,7 +2161,7 @@ title: My board
         }
         let mut r = runtime().lock().unwrap();
         let requested = authorized_boards.ok_or("authorized board IDs are required")?;
-        if requested.is_empty() || requested.iter().any(|id| !kanban_core::validate_ulid(id)) {
+        if requested.is_empty() || requested.iter().any(|id| !knot_core::validate_ulid(id)) {
             return Err("authorized boards must be valid board ULIDs".into());
         }
         let boards = requested.into_iter().collect();
@@ -1849,20 +2226,58 @@ title: My board
         identity.trust(peer_id.clone());
         identity.authorize_board(board_id.clone());
         let shared = Arc::new(tokio::sync::Mutex::new(repo));
-        kanban_sync::sync_once(&mut wire, shared.clone(), &identity, &peer_id, &board_id)
-            .await
-            .map_err(|e| e.to_string())?;
+        let conflicts =
+            knot_sync::sync_once(&mut wire, shared.clone(), &identity, &peer_id, &board_id)
+                .await
+                .map_err(|e| e.to_string())?;
         let repo = Arc::try_unwrap(shared)
             .map_err(|_| "sync busy".to_string())?
             .into_inner();
         let received = repo.revisions.len().saturating_sub(before);
         materialize(&path, &repo)?;
+        let conflicts: Vec<SyncConflict> = conflicts
+            .into_iter()
+            .map(|conflict| {
+                let local_revision_id = conflict.local.id.clone();
+                let remote_revision_id = conflict.remote.id.clone();
+                Ok(SyncConflict {
+                    card_id: conflict.card_id.clone(),
+                    local_revision_id,
+                    remote_revision_id,
+                    parent_revision_ids: vec![
+                        conflict.local.id.clone(),
+                        conflict.remote.id.clone(),
+                    ],
+                    local: if conflict.local.tombstone {
+                        None
+                    } else {
+                        Some(card_info(
+                            conflict.card_id.clone(),
+                            &conflict.local.content,
+                        )?)
+                    },
+                    remote: if conflict.remote.tombstone {
+                        None
+                    } else {
+                        Some(card_info(conflict.card_id, &conflict.remote.content)?)
+                    },
+                    local_tombstone: conflict.local.tombstone,
+                    remote_tombstone: conflict.remote.tombstone,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        let status = if conflicts.is_empty() {
+            "connected"
+        } else {
+            "conflict"
+        };
         let mut r = runtime().lock().unwrap();
-        r.last_connection = "connected".into();
+        r.last_connection = status.into();
         Ok(SyncResult {
-            status: "connected".into(),
+            status: status.into(),
             transferred: received,
             received,
+            conflicts,
         })
     }
     #[tauri::command]
@@ -1940,7 +2355,7 @@ mod tests {
 
     #[test]
     fn read_board_attachment_confines_media_to_board() {
-        let root = std::env::temp_dir().join(format!("irohmd-attachments-{}", ulid::Ulid::new()));
+        let root = std::env::temp_dir().join(format!("knot-attachments-{}", ulid::Ulid::new()));
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(root.join("assets/test.png"), b"image").unwrap();
         fs::write(root.join("secret.txt"), b"secret").unwrap();
@@ -1986,7 +2401,7 @@ mod tests {
 
     #[test]
     fn board_metadata_commands_persist() {
-        let p = std::env::temp_dir().join(format!("luna-board-meta-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-board-meta-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         let path = p.to_string_lossy().into_owned();
         let created = create_board(path.clone()).unwrap();
@@ -2013,7 +2428,7 @@ mod tests {
     }
     #[test]
     fn metadata_migration_preserves_column_extensions_and_failed_writes() {
-        let p = std::env::temp_dir().join(format!("luna-board-edge-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-board-edge-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(p.join("cards")).unwrap();
         let path = p.to_string_lossy().into_owned();
@@ -2072,7 +2487,7 @@ body";
     }
     #[test]
     fn open_or_create_initializes_empty_directories_and_preserves_existing_boards() {
-        let p = std::env::temp_dir().join(format!("irohmd-smart-open-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-smart-open-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         let path = p.to_string_lossy().into_owned();
@@ -2088,7 +2503,7 @@ body";
 
     #[test]
     fn reorders_columns_without_losing_metadata() {
-        let p = std::env::temp_dir().join(format!("irohmd-column-order-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-column-order-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         let path = p.to_string_lossy().into_owned();
         create_board(path.clone()).unwrap();
@@ -2111,7 +2526,7 @@ body";
 
     #[test]
     fn creates_and_cruds() {
-        let p = std::env::temp_dir().join(format!("luna-desktop-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-desktop-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         create_board(p.to_string_lossy().into()).unwrap();
         let c = add_card(
@@ -2136,7 +2551,7 @@ body";
         );
         let raw = fs::read_to_string(
             p.join("cards")
-                .join(kanban_store::card_filename("backlog", "T", &c.id)),
+                .join(knot_store::card_filename("backlog", "T", &c.id)),
         )
         .unwrap();
         let parsed = Card::parse(&raw).unwrap();
@@ -2166,7 +2581,7 @@ body";
         .unwrap();
         let raw = fs::read_to_string(
             p.join("cards")
-                .join(kanban_store::card_filename("done", "U", &c.id)),
+                .join(knot_store::card_filename("done", "U", &c.id)),
         )
         .unwrap();
         let parsed = Card::parse(&raw).unwrap();
@@ -2180,7 +2595,7 @@ body";
             Some("2026-09-10")
         );
         assert!(delete_card(p.to_string_lossy().into(), c.id).unwrap());
-        let revisions = fs::read_dir(p.join(".kanban/revisions")).unwrap().count();
+        let revisions = fs::read_dir(p.join(".knot/revisions")).unwrap().count();
         assert_eq!(revisions, 3);
         assert!(pair_peer("".into()).is_err());
         assert!(pair_peer("peer-test".into()).is_err());
@@ -2188,7 +2603,7 @@ body";
     }
     #[test]
     fn conflict_resolution_persists_both_parents() {
-        let p = std::env::temp_dir().join(format!("luna-conflict-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-conflict-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         create_board(p.to_string_lossy().into()).unwrap();
         let c = add_card(
@@ -2248,12 +2663,13 @@ body";
                     due: None,
                     start: None,
                 }),
+                tombstone: false,
                 parent_revision_ids: vec![first.clone(), second.clone()],
             },
         )
         .unwrap();
         let rev_id = resolved.revision.unwrap();
-        let bytes = fs::read(p.join(".kanban/revisions").join(format!("{rev_id}.json"))).unwrap();
+        let bytes = fs::read(p.join(".knot/revisions").join(format!("{rev_id}.json"))).unwrap();
         let persisted: Revision = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(persisted.parents, vec![first, second]);
         assert_eq!(resolved.title, "merged");
@@ -2261,7 +2677,7 @@ body";
     }
     #[test]
     fn share_path_is_posix_root_relative_and_safe() {
-        let p = std::env::temp_dir().join(format!("luna-share-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-share-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         create_board(p.to_string_lossy().into_owned()).unwrap();
         let card = add_card(
@@ -2282,7 +2698,7 @@ body";
             .canonicalize()
             .unwrap()
             .join("cards")
-            .join(kanban_store::card_filename("backlog", "x", &card.id))
+            .join(knot_store::card_filename("backlog", "x", &card.id))
             .to_string_lossy()
             .into_owned();
         assert_eq!(
@@ -2322,7 +2738,7 @@ body";
     }
     #[test]
     fn board_identity_migrates_valid_metadata_but_preserves_malformed() {
-        let p = std::env::temp_dir().join(format!("luna-board-id-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-board-id-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(p.join("cards")).unwrap();
         fs::write(p.join("board.md"), "---\ntitle: Valid\n---\n\nbody").unwrap();
@@ -2346,47 +2762,50 @@ body";
     }
     #[test]
     fn materialize_applies_only_head_and_tombstone() {
-        let p = std::env::temp_dir().join(format!("luna-materialize-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-materialize-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         create_board(p.to_string_lossy().into()).unwrap();
         let mut repo = MemoryRevisionRepository::new(board_identity(&p).unwrap());
-        repo.add(kanban_sync::Revision {
+        let card_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let old = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Old\ncolumn: backlog\nposition: 1000\n---\n\nold";
+        let new = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: New\ncolumn: backlog\nposition: 1000\n---\n\nnew";
+        repo.add(knot_sync::Revision {
             id: "z-old".into(),
-            card_id: "card".into(),
+            card_id: card_id.into(),
             parents: vec![],
-            content: "old".into(),
+            content: old.into(),
             tombstone: false,
         });
-        repo.add(kanban_sync::Revision {
+        repo.add(knot_sync::Revision {
             id: "a-new".into(),
-            card_id: "card".into(),
+            card_id: card_id.into(),
             parents: vec!["z-old".into()],
-            content: "new".into(),
+            content: new.into(),
             tombstone: false,
         });
         materialize(p.to_str().unwrap(), &repo).unwrap();
-        assert_eq!(
-            FsBoardStore::open(&p).unwrap().read_card("card").unwrap(),
-            "new"
+        assert!(
+            FsBoardStore::open(&p)
+                .unwrap()
+                .read_card(card_id)
+                .unwrap()
+                .contains("title: New")
         );
-        assert_eq!(
-            fs::read_dir(p.join(".kanban/revisions")).unwrap().count(),
-            2
-        );
-        repo.add(kanban_sync::Revision {
+        assert_eq!(fs::read_dir(p.join(".knot/revisions")).unwrap().count(), 2);
+        repo.add(knot_sync::Revision {
             id: "b-delete".into(),
-            card_id: "card".into(),
+            card_id: card_id.into(),
             parents: vec!["a-new".into()],
             content: String::new(),
             tombstone: true,
         });
         materialize(p.to_str().unwrap(), &repo).unwrap();
-        assert!(FsBoardStore::open(&p).unwrap().read_card("card").is_err());
+        assert!(FsBoardStore::open(&p).unwrap().read_card(card_id).is_err());
         let _ = fs::remove_dir_all(p);
     }
     #[test]
     fn watcher_reports_malformed_external_edit() {
-        let p = std::env::temp_dir().join(format!("luna-watch-{}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("knot-watch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         create_board(p.to_string_lossy().into()).unwrap();
         let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";

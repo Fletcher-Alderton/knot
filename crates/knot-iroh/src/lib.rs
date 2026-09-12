@@ -1,4 +1,4 @@
-//! Isolated Iroh transport for the kanban-sync protocol.
+//! Isolated Iroh transport for the knot-sync protocol.
 use async_trait::async_trait;
 pub use iroh::SecretKey;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
@@ -9,9 +9,9 @@ use tokio::{
     sync::{Mutex, mpsc},
 };
 
-pub const ALPN: &[u8] = b"kanban-sync/1";
+pub const ALPN: &[u8] = b"knot-sync/1";
 pub const PROTOCOL_VERSION: u8 = 1;
-pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+pub const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 
 /// Generate a cryptographically random identity for first-run persistence.
 pub fn generate_secret_key() -> SecretKey {
@@ -50,20 +50,23 @@ pub struct Received {
     pub payload: Vec<u8>,
 }
 
-/// Stable boundary used by kanban-sync; no Iroh types need escape this crate in production use.
+/// Stable boundary used by knot-sync; no Iroh types need escape this crate in production use.
 #[async_trait]
 pub trait RawPeerTransport: Send + Sync {
     async fn connect(&self, peer: EndpointAddr) -> Result<EndpointId, TransportError>;
     async fn send(&self, peer: EndpointId, payload: &[u8]) -> Result<(), TransportError>;
     async fn recv(&self) -> Result<Received, TransportError>;
 }
-type PeerReceiver = mpsc::Receiver<Result<Vec<u8>, TransportError>>;
+type PeerReceiver = mpsc::UnboundedReceiver<Result<Vec<u8>, TransportError>>;
+
+type IncomingReceiver = mpsc::Receiver<Result<Received, TransportError>>;
+type IncomingSender = mpsc::Sender<Result<Received, TransportError>>;
 
 struct Inner {
     endpoint: Endpoint,
     peers: Mutex<HashMap<EndpointId, Arc<iroh::endpoint::Connection>>>,
-    incoming_tx: mpsc::Sender<Result<Received, TransportError>>,
-    incoming: Mutex<mpsc::Receiver<Result<Received, TransportError>>>,
+    incoming_tx: IncomingSender,
+    incoming: Mutex<IncomingReceiver>,
     peer_receivers: Mutex<HashMap<EndpointId, PeerReceiver>>,
     accepted: Mutex<mpsc::Receiver<EndpointId>>,
 }
@@ -163,7 +166,7 @@ impl IrohTransport {
                         return;
                     }
                     // Publish only authenticated peers that completed our transport HELLO.
-                    let (peer_tx, peer_rx) = mpsc::channel(64);
+                    let (peer_tx, peer_rx) = mpsc::unbounded_channel();
                     connection_inner
                         .peers
                         .lock()
@@ -186,12 +189,11 @@ impl IrohTransport {
                                     &peer_tx,
                                     peer,
                                     Err(TransportError::Disconnected),
-                                )
-                                .await;
+                                );
                                 break;
                             }
                         };
-                        if !dispatch_received(&tx, &peer_tx, peer, read_frame(&mut r).await).await {
+                        if !dispatch_received(&tx, &peer_tx, peer, read_frame(&mut r).await) {
                             break;
                         }
                     }
@@ -272,24 +274,21 @@ fn copy_stream_error(error: &TransportError) -> TransportError {
     }
 }
 
-async fn dispatch_received(
-    global: &mpsc::Sender<Result<Received, TransportError>>,
-    peer_queue: &mpsc::Sender<Result<Vec<u8>, TransportError>>,
+fn dispatch_received(
+    global: &IncomingSender,
+    peer_queue: &mpsc::UnboundedSender<Result<Vec<u8>, TransportError>>,
     peer: EndpointId,
     result: Result<Vec<u8>, TransportError>,
 ) -> bool {
     match result {
         Ok(payload) => {
-            let peer_open = peer_queue.send(Ok(payload.clone())).await.is_ok();
-            let global_open = global.send(Ok(Received { peer, payload })).await.is_ok();
+            let peer_open = peer_queue.send(Ok(payload.clone())).is_ok();
+            let global_open = global.try_send(Ok(Received { peer, payload })).is_ok();
             peer_open || global_open
         }
         Err(error) => {
-            let peer_open = peer_queue
-                .send(Err(copy_stream_error(&error)))
-                .await
-                .is_ok();
-            let global_open = global.send(Err(error)).await.is_ok();
+            let peer_open = peer_queue.send(Err(copy_stream_error(&error))).is_ok();
+            let global_open = global.try_send(Err(error)).is_ok();
             peer_open || global_open
         }
     }
@@ -306,7 +305,7 @@ impl RawPeerTransport for IrohTransport {
             .map_err(|_| TransportError::Disconnected)?;
         write_frame(&mut w, &hello()).await?;
         self.inner.peers.lock().await.insert(id, conn.clone());
-        let (peer_tx, peer_rx) = mpsc::channel(64);
+        let (peer_tx, peer_rx) = mpsc::unbounded_channel();
         self.inner.peer_receivers.lock().await.insert(id, peer_rx);
         let tx = self.inner.incoming_tx.clone();
         tokio::spawn(async move {
@@ -315,12 +314,11 @@ impl RawPeerTransport for IrohTransport {
                     Ok(streams) => streams,
                     Err(_) => {
                         let _ =
-                            dispatch_received(&tx, &peer_tx, id, Err(TransportError::Disconnected))
-                                .await;
+                            dispatch_received(&tx, &peer_tx, id, Err(TransportError::Disconnected));
                         break;
                     }
                 };
-                if !dispatch_received(&tx, &peer_tx, id, read_frame(&mut r).await).await {
+                if !dispatch_received(&tx, &peer_tx, id, read_frame(&mut r).await) {
                     break;
                 }
             }
@@ -352,11 +350,11 @@ impl RawPeerTransport for IrohTransport {
             .unwrap_or(Err(TransportError::Disconnected))
     }
 }
-/// Connected adapter implementing the transport contract from kanban-sync.
+/// Connected adapter implementing the transport contract from knot-sync.
 pub struct ConnectedIrohTransport {
     transport: IrohTransport,
     peer: EndpointId,
-    incoming: mpsc::Receiver<Result<Vec<u8>, TransportError>>,
+    incoming: mpsc::UnboundedReceiver<Result<Vec<u8>, TransportError>>,
 }
 impl ConnectedIrohTransport {
     pub async fn connect(
@@ -394,46 +392,46 @@ impl ConnectedIrohTransport {
         self.peer
     }
 }
-fn map_error(e: TransportError) -> kanban_sync::TransportError {
+fn map_error(e: TransportError) -> knot_sync::TransportError {
     match e {
         TransportError::MessageTooLarge => {
-            kanban_sync::TransportError::Protocol(kanban_sync::ProtocolError::TooLarge)
+            knot_sync::TransportError::Protocol(knot_sync::ProtocolError::TooLarge)
         }
         TransportError::Malformed(s) => {
-            kanban_sync::TransportError::Protocol(kanban_sync::ProtocolError::Invalid(s))
+            knot_sync::TransportError::Protocol(knot_sync::ProtocolError::Invalid(s))
         }
         TransportError::Disconnected | TransportError::Io(_) | TransportError::Iroh(_) => {
-            kanban_sync::TransportError::Closed
+            knot_sync::TransportError::Closed
         }
     }
 }
 #[async_trait]
-impl kanban_sync::PeerTransport for ConnectedIrohTransport {
+impl knot_sync::PeerTransport for ConnectedIrohTransport {
     async fn send(
         &mut self,
-        message: kanban_sync::WireMessage,
-    ) -> Result<(), kanban_sync::TransportError> {
+        message: knot_sync::WireMessage,
+    ) -> Result<(), knot_sync::TransportError> {
         let bytes = message.encode()?;
         self.transport
             .send(self.peer, &bytes)
             .await
             .map_err(map_error)
     }
-    async fn recv(&mut self) -> Result<kanban_sync::WireMessage, kanban_sync::TransportError> {
+    async fn recv(&mut self) -> Result<knot_sync::WireMessage, knot_sync::TransportError> {
         let payload = self
             .incoming
             .recv()
             .await
-            .ok_or(kanban_sync::TransportError::Closed)?
+            .ok_or(knot_sync::TransportError::Closed)?
             .map_err(map_error)?;
-        kanban_sync::WireMessage::decode(&payload).map_err(kanban_sync::TransportError::from)
+        knot_sync::WireMessage::decode(&payload).map_err(knot_sync::TransportError::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kanban_sync::{Hello, Message, PeerTransport as SyncPeerTransport, WireMessage};
+    use knot_sync::{Hello, Message, PeerTransport as SyncPeerTransport, WireMessage};
     use tokio::time::{Duration, timeout};
 
     #[test]
@@ -444,6 +442,11 @@ mod tests {
     #[test]
     fn validates_version() {
         assert!(validate_hello(&hello()).is_ok());
+    }
+
+    #[test]
+    fn uses_knot_sync_protocol() {
+        assert_eq!(ALPN, b"knot-sync/1");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -502,7 +505,7 @@ mod tests {
             .expect("malformed receive timed out");
         assert!(matches!(
             malformed,
-            Err(kanban_sync::TransportError::Protocol(_))
+            Err(knot_sync::TransportError::Protocol(_))
         ));
 
         let oversized = vec![0_u8; MAX_MESSAGE_SIZE + 1];

@@ -1,13 +1,13 @@
 [package]
-name = "kanban-sync"
+name = "knot-sync"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-kanban-core = { path = "../kanban-core" }
-kanban-revisions = { path = "../kanban-revisions" }
-kanban-merge = { path = "../kanban-merge" }
+knot-core = { path = "../knot-core" }
+knot-revisions = { path = "../knot-revisions" }
+knot-merge = { path = "../knot-merge" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -19,12 +19,12 @@ Knot is a local-first Markdown Kanban desktop app. Boards remain ordinary Markdo
 
 The workspace is split into dependency-inward Rust crates and a thin Tauri adapter:
 
-- `kanban-core` — board/card domain types and Markdown/YAML rules.
-- `kanban-store` — filesystem-backed board storage and atomic writes.
-- `kanban-revisions` — immutable revision DAGs and tombstones.
-- `kanban-merge` — deterministic three-way merge and conflicts.
-- `kanban-sync` — versioned, transport-independent sync engine.
-- `kanban-iroh` — Iroh transport integration.
+- `knot-core` — board/card domain types and Markdown/YAML rules.
+- `knot-store` — filesystem-backed board storage and atomic writes.
+- `knot-revisions` — immutable revision DAGs and tombstones.
+- `knot-merge` — deterministic three-way merge and conflicts.
+- `knot-sync` — versioned, transport-independent sync engine.
+- `knot-iroh` — Iroh transport integration.
 - `apps/desktop` — TypeScript/Vite UI and Tauri boundary.
 
 The intended flow is `UI → Tauri → sync/store/core`. Core, revisions, and merge do not depend on Tauri or the network transport.
@@ -58,12 +58,12 @@ There is no web or server replacement application.
 
 ## Checks
 
-Rust checks, excluding the Iroh transport crate:
+Rust checks:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --exclude kanban-iroh -- -D warnings
-cargo test --workspace --exclude kanban-iroh
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 Frontend checks:
@@ -96,7 +96,9 @@ Column membership remains the `column` frontmatter field; card ordering remains 
 
 Saving a changed title or moving a card updates its filename. Renaming only a column display name does not. Legacy filenames remain readable and migrate when the card is saved. External paths copied before a rename can become stale; links containing the ULID suffix continue to resolve in the app.
 
-Malformed YAML is rejected without rewriting the source file. Unknown frontmatter is preserved. Every mutation creates an immutable revision; deletes are represented by tombstones.
+Malformed YAML is rejected without rewriting the source file. Unknown frontmatter is preserved. Card mutations create immutable revisions; deletes are represented by tombstones.
+
+Board revision metadata lives in `.knot/revisions/` alongside `board.md` and `cards/`. Install identity, sync settings, and Quick Add model files stay outside the board; Unix-like systems use `$HOME/.config/knot`, while Windows uses the `Knot` directory under `%LOCALAPPDATA%`. Keep install configuration private because it contains device identity and sync trust state.
 
 ## Markdown and attachments
 

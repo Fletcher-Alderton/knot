@@ -1,13 +1,13 @@
 [package]
-name = "kanban-store"
+name = "knot-revisions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-kanban-core = { path = "../kanban-core" }
-thiserror.workspace = true
+knot-core = { path = "../knot-core" }
 serde.workspace = true
-serde_yaml.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
+thiserror.workspace = true

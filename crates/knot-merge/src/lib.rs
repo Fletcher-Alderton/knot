@@ -1,5 +1,5 @@
 //! Deterministic, ancestry-aware three-way merge for cards.
-use kanban_core::{Activity, Card};
+use knot_core::{Activity, Card};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,8 +99,8 @@ fn merge_column(
     b: &str,
     l: &str,
     r: &str,
-    lc: &kanban_core::CardFrontmatter,
-    rc: &kanban_core::CardFrontmatter,
+    lc: &knot_core::CardFrontmatter,
+    rc: &knot_core::CardFrontmatter,
 ) -> String {
     if l == b {
         return r.into();
@@ -116,7 +116,7 @@ fn merge_column(
         r.into()
     }
 }
-fn newest_move(f: &kanban_core::CardFrontmatter) -> String {
+fn newest_move(f: &knot_core::CardFrontmatter) -> String {
     f.activity
         .iter()
         .filter(|a| {
@@ -127,7 +127,7 @@ fn newest_move(f: &kanban_core::CardFrontmatter) -> String {
         .max()
         .unwrap_or_default()
 }
-fn merge_position(b: i64, l: i64, r: i64, lc: &kanban_core::Card, rc: &kanban_core::Card) -> i64 {
+fn merge_position(b: i64, l: i64, r: i64, lc: &knot_core::Card, rc: &knot_core::Card) -> i64 {
     if l == b {
         r
     } else if r == b || l == r {
@@ -151,7 +151,7 @@ fn stable_key(c: &Card) -> String {
         c.body
     )
 }
-fn choose_sync(b: &Card, l: &Card, r: &Card) -> Option<kanban_core::SyncMetadata> {
+fn choose_sync(b: &Card, l: &Card, r: &Card) -> Option<knot_core::SyncMetadata> {
     if stable_key(l) >= stable_key(r) {
         l.frontmatter.sync.clone()
     } else if stable_key(r) >= stable_key(b) {
@@ -253,7 +253,7 @@ mod tests {
     use super::*;
     fn card(title: &str, body: &str) -> Card {
         Card {
-            frontmatter: kanban_core::CardFrontmatter {
+            frontmatter: knot_core::CardFrontmatter {
                 id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
                 title: title.into(),
                 column: "todo".into(),

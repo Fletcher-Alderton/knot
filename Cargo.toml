@@ -1,11 +1,11 @@
 [workspace]
 members = [
-  "crates/kanban-core",
-  "crates/kanban-store",
-  "crates/kanban-revisions",
-  "crates/kanban-merge",
-  "crates/kanban-sync",
-  "crates/kanban-iroh",
+  "crates/knot-core",
+  "crates/knot-store",
+  "crates/knot-revisions",
+  "crates/knot-merge",
+  "crates/knot-sync",
+  "crates/knot-iroh",
   "apps/desktop/src-tauri",
 ]
 resolver = "2"

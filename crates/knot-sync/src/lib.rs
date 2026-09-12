@@ -43,7 +43,7 @@ impl Revision {
             tombstone: true,
         }
     }
-    pub fn from_domain(value: &kanban_revisions::Revision) -> Self {
+    pub fn from_domain(value: &knot_revisions::Revision) -> Self {
         Self {
             id: value.revision_id.clone(),
             card_id: value.card_id.clone(),
@@ -52,16 +52,16 @@ impl Revision {
             tombstone: value.tombstone,
         }
     }
-    pub fn to_domain(&self, timestamp: u64) -> kanban_revisions::Revision {
+    pub fn to_domain(&self, timestamp: u64) -> knot_revisions::Revision {
         if self.tombstone {
-            kanban_revisions::tombstone(
+            knot_revisions::tombstone(
                 self.id.clone(),
                 self.card_id.clone(),
                 self.parents.clone(),
                 timestamp,
             )
         } else {
-            kanban_revisions::snapshot(
+            knot_revisions::snapshot(
                 self.id.clone(),
                 self.card_id.clone(),
                 self.parents.clone(),
@@ -286,6 +286,45 @@ pub struct Conflict {
     pub local: Revision,
     pub remote: Revision,
 }
+
+fn reconcile_heads<R: RevisionRepository>(repo: &mut R) -> Vec<Conflict> {
+    let mut by_card: HashMap<String, Vec<Revision>> = HashMap::new();
+    let heads: HashSet<String> = repo.heads().into_iter().collect();
+    for revision in repo.all().into_iter().filter(|r| heads.contains(&r.id)) {
+        by_card
+            .entry(revision.card_id.clone())
+            .or_default()
+            .push(revision);
+    }
+    let mut conflicts = Vec::new();
+    for revisions in by_card.into_values() {
+        let card_id = revisions[0].card_id.clone();
+        let mut current = revisions;
+        loop {
+            if current.len() < 2 {
+                break;
+            }
+            current.sort_by(|a, b| a.id.cmp(&b.id));
+            match merge_divergent(repo, &current[0], &current[1]) {
+                Ok(merged) => {
+                    repo.insert(merged);
+                    let heads: HashSet<String> = repo.heads().into_iter().collect();
+                    current = repo
+                        .all()
+                        .into_iter()
+                        .filter(|r| r.card_id == card_id && heads.contains(&r.id))
+                        .collect();
+                }
+                Err(conflict) => {
+                    conflicts.push(*conflict);
+                    break;
+                }
+            }
+        }
+    }
+    conflicts
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum SyncError {
     #[error("transport: {0}")]
@@ -335,7 +374,10 @@ fn merged_id(card_id: &str, parents: &[String], content: &str, tombstone: bool) 
     }
     h.update([tombstone as u8]);
     h.update(content);
-    format!("merge:{}", hex::encode(h.finalize()))
+    let digest = h.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    ulid::Ulid::from_bytes(bytes).to_string()
 }
 fn conflict(local: &Revision, remote: &Revision) -> Box<Conflict> {
     Box::new(Conflict {
@@ -346,6 +388,13 @@ fn conflict(local: &Revision, remote: &Revision) -> Box<Conflict> {
 }
 /// Deterministically merges equivalent heads. Ancestry-aware merging is performed by sync_memory.
 pub fn merge_revisions(local: &Revision, remote: &Revision) -> Result<Revision, Box<Conflict>> {
+    if local.id == remote.id {
+        return if local == remote {
+            Ok(local.clone())
+        } else {
+            Err(conflict(local, remote))
+        };
+    }
     if local.card_id != remote.card_id
         || local.content != remote.content
         || local.tombstone != remote.tombstone
@@ -379,11 +428,11 @@ pub fn resolve_conflict(
         tombstone,
     }
 }
-fn ancestors(repo: &MemoryRevisionRepository, id: &str) -> HashSet<String> {
+fn ancestors<R: RevisionRepository>(repo: &R, id: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut stack = vec![id.to_string()];
     while let Some(x) = stack.pop() {
-        if let Some(r) = repo.revisions.get(&x) {
+        if let Some(r) = repo.get(&x) {
             for p in &r.parents {
                 if out.insert(p.clone()) {
                     stack.push(p.clone())
@@ -393,8 +442,8 @@ fn ancestors(repo: &MemoryRevisionRepository, id: &str) -> HashSet<String> {
     }
     out
 }
-fn merge_divergent(
-    repo: &MemoryRevisionRepository,
+fn merge_divergent<R: RevisionRepository>(
+    repo: &R,
     local: &Revision,
     remote: &Revision,
 ) -> Result<Revision, Box<Conflict>> {
@@ -407,36 +456,41 @@ fn merge_divergent(
     ra.insert(remote.id.clone());
     let mut common: Vec<_> = la.intersection(&ra).cloned().collect();
     common.sort();
-    let Some(base) = common
-        .into_iter()
-        .rev()
-        .find_map(|id| repo.revisions.get(&id))
-    else {
+    let Some(base) = common.into_iter().rev().find_map(|id| repo.get(&id)) else {
         return Err(conflict(local, remote));
     };
     if base.tombstone {
         return Err(conflict(local, remote));
     }
-    let Ok(base_card) = kanban_core::Card::parse(&base.content) else {
+    let Ok(base_card) = knot_core::Card::parse(&base.content) else {
         return Err(conflict(local, remote));
     };
-    let Ok(local_card) = kanban_core::Card::parse(&local.content) else {
+    let Ok(local_card) = knot_core::Card::parse(&local.content) else {
         return Err(conflict(local, remote));
     };
-    let Ok(remote_card) = kanban_core::Card::parse(&remote.content) else {
+    let Ok(remote_card) = knot_core::Card::parse(&remote.content) else {
         return Err(conflict(local, remote));
     };
-    let result = kanban_merge::merge(&base_card, &local_card, &remote_card);
+    let result = knot_merge::merge(&base_card, &local_card, &remote_card);
     if result.is_conflicted() {
         return Err(conflict(local, remote));
     }
-    let Ok(content) = result.card.serialize() else {
-        return Err(conflict(local, remote));
-    };
     let mut parents = vec![local.id.clone(), remote.id.clone()];
     parents.sort();
+    let Ok(initial_content) = result.card.serialize() else {
+        return Err(conflict(local, remote));
+    };
+    let merge_id = merged_id(&local.card_id, &parents, &initial_content, false);
+    let mut merged_card = result.card;
+    if let Some(sync) = merged_card.frontmatter.sync.as_mut() {
+        sync.revision = Some(merge_id.clone());
+        sync.parents = parents.clone();
+    }
+    let Ok(content) = merged_card.serialize() else {
+        return Err(conflict(local, remote));
+    };
     Ok(Revision {
-        id: merged_id(&local.card_id, &parents, &content, false),
+        id: merge_id,
         card_id: local.card_id.clone(),
         parents,
         content,
@@ -464,10 +518,18 @@ pub fn sync_memory(
         .cloned()
         .collect();
     for r in all {
-        if a.insert(r.clone()) {
+        if let Some(existing) = a.get(&r.id) {
+            if existing != r {
+                out.conflicts.push(*conflict(&existing, &r));
+            }
+        } else if a.insert(r.clone()) {
             out.transferred += 1;
         }
-        if b.insert(r) {
+        if let Some(existing) = b.get(&r.id) {
+            if existing != r {
+                out.conflicts.push(*conflict(&existing, &r));
+            }
+        } else if b.insert(r) {
             out.transferred += 1;
         }
     }
@@ -515,24 +577,32 @@ async fn send_revisions<T: PeerTransport, R: RevisionRepository>(
         .await?;
     Ok(())
 }
+fn safe_revision_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 fn validate_incoming_revision<R: RevisionRepository>(
     repo: &R,
     r: &Revision,
 ) -> Result<(), SyncError> {
-    if r.id.is_empty()
-        || r.card_id.is_empty()
-        || r.card_id.len() > 200
-        || !r
-            .card_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        || r.id.len() > 200
+    if !safe_revision_component(&r.id)
+        || !safe_revision_component(&r.card_id)
         || r.parents.len() > 2
-        || r.parents.iter().any(|p| p.is_empty() || p == &r.id)
+        || r.parents
+            .iter()
+            .any(|p| !safe_revision_component(p) || p == &r.id)
         || r.parents.windows(2).any(|p| p[0] == p[1])
         || r.content.len() > MAX_MESSAGE
         || (r.tombstone && !r.content.is_empty())
-        || (!r.tombstone && r.content.is_empty())
+        || (!r.tombstone
+            && match knot_core::Card::parse(&r.content) {
+                Ok(card) => card.frontmatter.id != r.card_id,
+                Err(_) => true,
+            })
     {
         return Err(SyncError::Transport(TransportError::Protocol(
             ProtocolError::Invalid("invalid revision response".into()),
@@ -670,7 +740,11 @@ pub async fn sync_once<T: PeerTransport, R: RevisionRepository>(
         receive_revisions(transport, &repo).await?;
         send_revisions(transport, &repo).await?;
     }
-    Ok(Vec::new())
+    let conflicts = {
+        let mut guard = repo.lock().await;
+        reconcile_heads(&mut *guard)
+    };
+    Ok(conflicts)
 }
 
 #[cfg(test)]
@@ -679,8 +753,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn card(title: &str, due: Option<&str>, body: &str) -> String {
-        kanban_core::Card {
-            frontmatter: kanban_core::CardFrontmatter {
+        knot_core::Card {
+            frontmatter: knot_core::CardFrontmatter {
                 id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
                 title: title.into(),
                 column: "todo".into(),
@@ -889,7 +963,7 @@ THREE",
     }
     #[test]
     fn revision_crate_adapter_preserves_tombstone() {
-        let d = kanban_revisions::tombstone("r", "card", vec![], 7);
+        let d = knot_revisions::tombstone("r", "card", vec![], 7);
         let w = Revision::from_domain(&d);
         assert!(w.tombstone);
         assert_eq!(w.to_domain(7), d);

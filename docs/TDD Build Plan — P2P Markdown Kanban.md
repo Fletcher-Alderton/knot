@@ -33,12 +33,12 @@ No central server or database is required.
 
 ```text
 crates/
-  kanban-core/
-  kanban-store/
-  kanban-revisions/
-  kanban-merge/
-  kanban-sync/
-  kanban-iroh/
+  knot-core/
+  knot-store/
+  knot-revisions/
+  knot-merge/
+  knot-sync/
+  knot-iroh/
 
 apps/
   desktop/
@@ -57,7 +57,7 @@ merge → core
 revisions → core
 ```
 
-`kanban-core`, `kanban-revisions`, and `kanban-merge` must not depend on Tauri or Iroh.
+`knot-core`, `knot-revisions`, and `knot-merge` must not depend on Tauri or Iroh.
 
 ---
 

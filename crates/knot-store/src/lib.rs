@@ -30,12 +30,12 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 
 /// Canonical card filename: `{column}-{title}-{id}.md`.
 pub fn card_filename(column: &str, title: &str, id: &str) -> String {
-    kanban_core::card_filename(column, title, id)
+    knot_core::card_filename(column, title, id)
 }
 
 /// Extract ID from canonical or legacy filename stem.
 pub fn extract_card_id(stem: &str) -> &str {
-    kanban_core::extract_id_from_filename(stem)
+    knot_core::extract_id_from_filename(stem)
 }
 
 /// A store deliberately deals in serialized markdown so malformed documents are never rewritten.
@@ -67,6 +67,33 @@ fn atomic(path: &Path, data: &str) -> io::Result<()> {
         unique_suffix()
     ));
     fs::write(&tmp, data)?;
+    #[cfg(windows)]
+    if path.exists() {
+        let backup = path.with_file_name(format!(".{name}.backup-{}", unique_suffix()));
+        fs::copy(path, &backup)?;
+        if let Err(error) = fs::remove_file(path) {
+            let _ = fs::remove_file(&backup);
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
+        return match fs::rename(&tmp, path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup);
+                Ok(())
+            }
+            Err(error) => {
+                let restore = fs::rename(&backup, path);
+                let _ = fs::remove_file(&tmp);
+                match restore {
+                    Ok(()) => Err(error),
+                    Err(restore_error) => Err(io::Error::new(
+                        restore_error.kind(),
+                        format!("replacement failed: {error}; restore failed: {restore_error}"),
+                    )),
+                }
+            }
+        };
+    }
     match fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -362,7 +389,7 @@ mod tests {
 
     #[test]
     fn filesystem_crud_and_external_reread() {
-        let root = std::env::temp_dir().join(format!("kanban-store-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("knot-store-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut s = FsBoardStore::new(&root).unwrap();
         s.write_card("x", "---\nid: x\ncolumn: backlog\ntitle: Hello\n---\nhello")
@@ -400,7 +427,7 @@ mod tests {
 
     #[test]
     fn legacy_id_file_compatibility() {
-        let root = std::env::temp_dir().join(format!("kanban-legacy-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("knot-legacy-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut s = FsBoardStore::new(&root).unwrap();
         fs::write(
@@ -430,7 +457,7 @@ mod tests {
 
     #[test]
     fn duplicate_ids_are_reported() {
-        let root = std::env::temp_dir().join(format!("kanban-dup-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("knot-dup-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut s = FsBoardStore::new(&root).unwrap();
         s.write_card("a", "---\nid: same\ncolumn: col\ntitle: A\n---\n")
@@ -452,7 +479,7 @@ mod tests {
 
     #[test]
     fn id_confinement() {
-        let root = std::env::temp_dir().join(format!("kanban-confine-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("knot-confine-{}", std::process::id()));
         let mut s = FsBoardStore::new(&root).unwrap();
         assert!(s.read_card("../x").is_err());
         assert!(s.write_card("../x", "bad").is_err());

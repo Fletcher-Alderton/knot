@@ -1117,12 +1117,12 @@ dependencies = [
  "futures-util",
  "hf-hub",
  "iroh",
- "kanban-core",
- "kanban-iroh",
- "kanban-merge",
- "kanban-revisions",
- "kanban-store",
- "kanban-sync",
+ "knot-core",
+ "knot-iroh",
+ "knot-merge",
+ "knot-revisions",
+ "knot-store",
+ "knot-sync",
  "llama-cpp-2",
  "notify",
  "reqwest",
@@ -3008,80 +3008,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kanban-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "thiserror 2.0.20",
- "ulid",
-]
-
-[[package]]
-name = "kanban-iroh"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "iroh",
- "kanban-sync",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "kanban-merge"
-version = "0.1.0"
-dependencies = [
- "kanban-core",
- "serde",
-]
-
-[[package]]
-name = "kanban-revisions"
-version = "0.1.0"
-dependencies = [
- "hex",
- "kanban-core",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "kanban-store"
-version = "0.1.0"
-dependencies = [
- "hex",
- "kanban-core",
- "serde",
- "serde_yaml",
- "sha2 0.10.9",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "kanban-sync"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "hex",
- "kanban-core",
- "kanban-merge",
- "kanban-revisions",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.20",
- "tokio",
- "ulid",
-]
-
-[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3090,6 +3016,80 @@ dependencies = [
  "bitflags 2.13.1",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "knot-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "ulid",
+]
+
+[[package]]
+name = "knot-iroh"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "iroh",
+ "knot-sync",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "knot-merge"
+version = "0.1.0"
+dependencies = [
+ "knot-core",
+ "serde",
+]
+
+[[package]]
+name = "knot-revisions"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "knot-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "knot-store"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "knot-core",
+ "serde",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "knot-sync"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "knot-core",
+ "knot-merge",
+ "knot-revisions",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "ulid",
 ]
 
 [[package]]

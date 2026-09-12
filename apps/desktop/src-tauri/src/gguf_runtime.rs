@@ -37,11 +37,7 @@ fn lock_runtime() -> Result<MutexGuard<'static, Option<GgufRuntime>>, String> {
 fn runtime(guard: &mut Option<GgufRuntime>) -> Result<&mut GgufRuntime, String> {
     if guard.is_none() {
         let mut backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-        if std::env::var_os("KNOT_LLAMA_LOG")
-            .or_else(|| std::env::var_os("IROHMD_LLAMA_LOG"))
-            .as_deref()
-            != Some(std::ffi::OsStr::new("1"))
-        {
+        if std::env::var_os("KNOT_LLAMA_LOG").as_deref() != Some(std::ffi::OsStr::new("1")) {
             backend.void_logs();
         }
         *guard = Some(GgufRuntime {

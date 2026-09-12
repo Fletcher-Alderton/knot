@@ -1,5 +1,5 @@
 [package]
-name = "kanban-iroh"
+name = "knot-iroh"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,4 +11,4 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 iroh = "1.1"
-kanban-sync = { path = "../kanban-sync" }
+knot-sync = { path = "../knot-sync" }

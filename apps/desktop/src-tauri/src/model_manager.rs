@@ -1,8 +1,11 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs,
-    path::PathBuf,
+    io::Write,
+    path::{Component, Path, PathBuf},
     time::{Duration, Instant},
 };
 use tokio::io::AsyncWriteExt;
@@ -55,24 +58,12 @@ impl Default for ModelSettings {
 
 pub fn models_root() -> PathBuf {
     if let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")) {
-        let knot = PathBuf::from(&base).join("Knot/models");
-        let legacy = PathBuf::from(base).join("IrohMD/models");
-        return if knot.exists() || !legacy.exists() {
-            knot
-        } else {
-            legacy
-        };
+        return PathBuf::from(base).join("Knot/models");
     }
-    let home = std::env::var_os("HOME")
+    std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let knot = home.join(".config/knot/models");
-    let legacy = home.join(".config/irohmd/models");
-    if knot.exists() || !legacy.exists() {
-        knot
-    } else {
-        legacy
-    }
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config/knot/models")
 }
 
 fn settings_path() -> PathBuf {
@@ -91,11 +82,47 @@ pub fn save_settings(settings: &ModelSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let temporary = path.with_file_name(format!(".model-settings.{}.tmp", ulid::Ulid::new()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    #[cfg(windows)]
+    if path.exists() {
+        let backup = path.with_file_name(format!(".model-settings.backup.{}", ulid::Ulid::new()));
+        fs::copy(&path, &backup).map_err(|e| e.to_string())?;
+        if let Err(error) = fs::remove_file(&path) {
+            let _ = fs::remove_file(&backup);
+            let _ = fs::remove_file(&temporary);
+            return Err(error.to_string());
+        }
+        return match fs::rename(&temporary, &path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup);
+                Ok(())
+            }
+            Err(error) => {
+                let restore = fs::rename(&backup, &path);
+                let _ = fs::remove_file(&temporary);
+                match restore {
+                    Ok(()) => Err(error.to_string()),
+                    Err(restore_error) => Err(format!(
+                        "replacement failed: {error}; restore failed: {restore_error}"
+                    )),
+                }
+            }
+        };
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 pub fn list_local_models() -> Result<Vec<LocalModel>, String> {
@@ -476,9 +503,15 @@ pub async fn download_huggingface_gguf<F>(
 where
     F: FnMut(DownloadProgress),
 {
-    if !repo_id.contains('/')
-        || filename.contains('/')
-        || !filename.to_ascii_lowercase().ends_with(".gguf")
+    let filename_path = Path::new(filename);
+    let safe_filename = filename_path.components().count() == 1
+        && matches!(
+            filename_path.components().next(),
+            Some(Component::Normal(_))
+        )
+        && !filename.contains('/')
+        && !filename.contains('\\');
+    if !repo_id.contains('/') || !safe_filename || !filename.to_ascii_lowercase().ends_with(".gguf")
     {
         return Err("expected a Hugging Face repo id and a .gguf filename".into());
     }

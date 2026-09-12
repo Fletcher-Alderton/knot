@@ -10,7 +10,7 @@ import { motionValue, springValue, styleEffect, type MotionValue } from 'motion'
 export type Column = string;
 export interface ColumnInfo { id: string; name: string }
 export interface Card { id:string; title:string; body:string; column:Column; labels:string[]; labelColors?:Record<string,string>; updatedAt:number; revision?:string; position?:number; due?:string; start?:string }
-export interface Conflict { cardId:string; local:string; remote:string; base:string; parentRevisionIds?:string[]; localCard?:Card; remoteCard?:Card }
+export interface Conflict { cardId:string; local:string; remote:string; base:string; parentRevisionIds?:string[]; localCard?:Card; remoteCard?:Card; localTombstone?:boolean; remoteTombstone?:boolean }
 export interface BackendCard { id:string; title:string; body:string; column:string; labels?:string[]; label_colors?:Record<string,string>; updated_at?:string; revision?:string; position?:number; due?:string; start?:string }
 export interface BackendEvent { path:string; kind:string; valid:boolean; duplicate:boolean; error?:string }
 export interface ArchivedCard { card:BackendCard; revision_id:string; archived_at:number }
@@ -52,7 +52,6 @@ const defaultColumns = ():ColumnInfo[] => [
 
 export type DueDateDisplay = 'calendar' | 'countdown';
 export const DUE_DATE_DISPLAY_STORAGE_KEY = 'knot.due-date-display';
-const LEGACY_DUE_DATE_DISPLAY_STORAGE_KEY = 'irohmd.due-date-display';
 
 interface CalendarDateParts { year:number; month:number; day:number }
 function parseCalendarDate(value:string):CalendarDateParts|null {
@@ -67,7 +66,7 @@ function parseCalendarDate(value:string):CalendarDateParts|null {
 
 export function loadDueDateDisplayPreference():DueDateDisplay {
   try{
-    const value=window.localStorage.getItem(DUE_DATE_DISPLAY_STORAGE_KEY)??window.localStorage.getItem(LEGACY_DUE_DATE_DISPLAY_STORAGE_KEY);
+    const value=window.localStorage.getItem(DUE_DATE_DISPLAY_STORAGE_KEY);
     return value==='countdown'?'countdown':'calendar';
   }
   catch{return 'calendar';}
@@ -249,7 +248,7 @@ export async function deleteAllModels(){if(!window.confirm('Delete all locally d
 export async function loadSync(){try{const [s,endpoint,peers]=await Promise.all([invoke<{connected:boolean;trusted_peers:number;endpoint_id?:string;address?:string;connection:string}>('sync_status'),invoke<{endpoint_id:string;address:string}>('endpoint_info'),invoke<{peer_id:string;trusted:boolean;address?:string}[]>('list_trusted_peers')]);state.connected=!!s.connected;state.connection=s.connection;state.endpointId=endpoint.endpoint_id||s.endpoint_id||'';state.endpointAddress=endpoint.address||s.address||'';const trusted=peers.filter(x=>x.trusted);state.peer=trusted.map(x=>x.peer_id).join(', ')||'No devices paired';if(!state.peerId&&trusted.length)state.peerId=trusted[0].peer_id;if(!state.peerAddress&&trusted.length)state.peerAddress=trusted.find(x=>x.peer_id===state.peerId)?.address||'';}catch(e){state.error='Unable to read sync status: '+message(e);}render();}
 function endpointIdFromAddress(address:string):string{const parsed=JSON.parse(address) as {id?:string};if(!parsed.id||typeof parsed.id!=='string')throw new Error('Endpoint address does not contain an id');return parsed.id;}
 export async function pairAddress(address:string){if(!state.boardPath||!state.boardId)throw new Error('Open a board with a stable board ID before pairing');const peerId=endpointIdFromAddress(address);const peer=await invoke<{peer_id:string;trusted:boolean}>('pair_peer_address',{peerId,address,authorizedBoards:[state.boardId]});if(!peer.trusted)throw new Error('Peer was not trusted');state.peerId=peer.peer_id;state.peerAddress=address;await loadSync();return peer;}
-export async function syncNow(){if(!state.boardPath||!state.boardId){state.error='Open a board with a stable board ID before syncing.';render();return;}if(!state.peerId||!state.peerAddress){state.error='Pair a peer address before syncing.';render();return;}state.loading=true;render();try{const result=await invoke<{status:string;transferred:number;received:number}>('sync_board',{path:state.boardPath,peerId:state.peerId,address:state.peerAddress});const successfulRoute=['connected','direct','relay'].includes(result.status);state.error=successfulRoute?'':`Sync finished with status: ${result.status}`;await loadCards();await loadSync();if(successfulRoute){state.connected=true;state.connection=result.status;state.error='';render();}}catch(e){state.error='Sync failed: '+message(e);state.loading=false;render();}}
+export async function syncNow(){if(!state.boardPath||!state.boardId){state.error='Open a board with a stable board ID before syncing.';render();return;}if(!state.peerId||!state.peerAddress){state.error='Pair a peer address before syncing.';render();return;}state.loading=true;render();try{const result=await invoke<{status:string;transferred:number;received:number;conflicts?:{card_id:string;local_revision_id:string;remote_revision_id:string;parent_revision_ids:string[];local?:BackendCard;remote?:BackendCard;local_tombstone:boolean;remote_tombstone:boolean}[]}>('sync_board',{path:state.boardPath,peerId:state.peerId,address:state.peerAddress});const successfulRoute=['connected','direct','relay'].includes(result.status);await loadCards();state.conflicts=(result.conflicts||[]).map(conflict=>({cardId:conflict.card_id,local:'Local revision '+conflict.local_revision_id,remote:'Remote revision '+conflict.remote_revision_id,base:'Sync conflict',parentRevisionIds:conflict.parent_revision_ids,localCard:conflict.local?normalize(conflict.local):state.cards.find(card=>card.id===conflict.card_id),remoteCard:conflict.remote?normalize(conflict.remote):undefined,localTombstone:conflict.local_tombstone,remoteTombstone:conflict.remote_tombstone}));await loadSync();state.error=successfulRoute?'':result.status==='conflict'?'Sync completed with unresolved conflicts.':`Sync finished with status: ${result.status}`;if(successfulRoute){state.connected=true;state.connection=result.status;}render();}catch(e){state.error='Sync failed: '+message(e);state.loading=false;render();}}
 
 export async function openBoard(){const p=await chooseBoardDirectory();if(!p)return;state.loading=true;state.error='';render();try{const info=await invoke<BoardInfo>('open_or_create_board',{path:p});applyBoardInfo(info);state.view='board';await invoke('watch_board',{path:state.boardPath});await loadCards();await loadSync();}catch(e){state.error='Unable to open board: '+message(e);state.boardPath=null;state.boardId='';state.cards=[];state.loading=false;render();}}
 export async function switchBoard(path:string){if(path===state.boardPath){state.view='board';render();return;}state.loading=true;state.error='';render();try{const info=await invoke<BoardInfo>('open_board',{path});applyBoardInfo(info);state.view='board';await invoke('watch_board',{path});await loadCards();}catch(e){state.error='Unable to switch board: '+message(e);state.loading=false;render();}}
@@ -264,19 +263,21 @@ export async function reorderColumns(columnIds:string[]){if(!state.boardPath||co
 
 async function add(column:Column){if(!state.boardPath){state.error='Open or create a board before adding cards.';render();return;}try{const saved=await invoke<BackendCard>('add_card',{path:state.boardPath,input:{title:'New card',body:'Add a description…',column,labels:[],position:1000}});state.cards.push(normalize(saved));state.selected=saved.id;state.error='';render();}catch(e){state.error='Unable to add card: '+message(e);render();}}
 const pendingSaves = new Set<string>();
+const pendingResaves = new Set<string>();
 async function save(c:Card) {
   const boardPath=state.boardPath;
   if(!boardPath)return;
   const key=JSON.stringify([boardPath,c.id]);
-  if(pendingSaves.has(key))return;
+  if(pendingSaves.has(key)){pendingResaves.add(key);return;}
+  const existing=state.drafts[boardPath]?.[c.id]||{};
   const draft:Partial<Card>={
-    title:document.querySelector<HTMLInputElement>('#title')!.value,
-    body:document.querySelector<HTMLTextAreaElement>('#body')!.value,
-    column:document.querySelector<HTMLSelectElement>('#column')!.value,
-    labels:Array.from(document.querySelector<HTMLSelectElement>('#labels')?.selectedOptions||[],option=>option.value),
-    labelColors:{...(c.labelColors||{}),...state.labelColors},
-    due:document.querySelector<HTMLInputElement>('#due')?.value||'',
-    start:document.querySelector<HTMLInputElement>('#start')?.value||'',
+    title:document.querySelector<HTMLInputElement>('#title')?.value??existing.title??c.title,
+    body:document.querySelector<HTMLTextAreaElement>('#body')?.value??existing.body??c.body,
+    column:document.querySelector<HTMLSelectElement>('#column')?.value??existing.column??c.column,
+    labels:Array.from(document.querySelector<HTMLSelectElement>('#labels')?.selectedOptions||[]).map(option=>option.value),
+    labelColors:{...(c.labelColors||{}),...(existing.labelColors||{}),...state.labelColors},
+    due:document.querySelector<HTMLInputElement>('#due')?.value??existing.due??'',
+    start:document.querySelector<HTMLInputElement>('#start')?.value??existing.start??'',
   };
   (state.drafts[boardPath]??={})[c.id]=draft;
   const input={title:draft.title,body:draft.body,column:draft.column,labels:draft.labels,label_colors:draft.labelColors,due:draft.due||undefined,start:draft.start||undefined,position:c.position};
@@ -294,7 +295,13 @@ async function save(c:Card) {
     }
   } catch(e) {
     if(state.boardPath===boardPath){state.error='Unable to save card: '+message(e);render();}
-  } finally { pendingSaves.delete(key); }
+  } finally {
+    pendingSaves.delete(key);
+    if(pendingResaves.delete(key)){
+      const latest=state.cards.find(card=>card.id===c.id);
+      if(latest)queueMicrotask(()=>void save(latest));
+    }
+  }
 }
 async function remove(id:string){if(!state.boardPath)return;try{await invoke<boolean>('delete_card',{path:state.boardPath,id});state.cards=state.cards.filter(x=>x.id!==id);state.selected=null;state.error='';render();}catch(e){state.error='Unable to delete card: '+message(e);render();}}
 function showDialog(dialog:DialogState){state.dialog=dialog;render();queueMicrotask(()=>document.querySelector<HTMLElement>('#dialog-input, #dialog-confirm')?.focus());}
@@ -345,7 +352,7 @@ export async function moveCardToSlot(id:string,column:Column,beforeId:string|nul
   }
 }
 export async function moveCard(id:string,column:Column,position=1000){if(!state.boardPath)return;const old=state.cards.find(x=>x.id===id);if(!old)return;const previous=old.column,previousPosition=old.position;state.cards=state.cards.map(x=>x.id===id?{...x,column,position}:x);render();try{const saved=await invoke<BackendCard>('move_card',{path:state.boardPath,id,column,position});state.cards=state.cards.map(x=>x.id===id?normalize(saved):x);state.error='';render();}catch(e){state.cards=state.cards.map(x=>x.id===id?{...x,column:previous,position:previousPosition}:x);state.error='Unable to move card: '+message(e);render();}}
-async function resolveConflict(choice:string){const x=state.conflicts[0];if(!x||!state.boardPath)return;const c=x.localCard||state.cards.find(v=>v.id===x.cardId);if(!c||!x.parentRevisionIds||x.parentRevisionIds.length<2){state.error='Conflict resolution needs two parent revision IDs.';render();return;}const payload={title:c.title,body:c.body,column:c.column,labels:c.labels,position:1000};try{const saved=await invoke<BackendCard>('resolve_conflict',{path:state.boardPath,id:x.cardId,resolution:{choice,local:payload,remote:payload,manual:choice==='manual'?payload:null,parentRevisionIds:x.parentRevisionIds}});state.cards=state.cards.map(v=>v.id===x.cardId?normalize(saved):v);state.conflicts=[];state.error='';render();}catch(e){state.error='Conflict resolution failed: '+message(e);render();}}
+async function resolveConflict(choice:string){const x=state.conflicts[0];if(!x||!state.boardPath)return;const local=x.localCard||state.cards.find(v=>v.id===x.cardId);const remote=x.remoteCard||local;const deleteChoice=(choice==='local'&&x.localTombstone)||(choice==='remote'&&x.remoteTombstone);if((!local&&!deleteChoice)||(!remote&&!deleteChoice)||!x.parentRevisionIds||x.parentRevisionIds.length<2){state.error='Conflict resolution needs two parent revision IDs.';render();return;}const payload=(card:Card)=>({title:card.title,body:card.body,column:card.column,labels:card.labels,position:card.position??1000,due:card.due,start:card.start});const fallback:Card={id:x.cardId,title:'Deleted card',body:'',column:'backlog',labels:[],updatedAt:0};const localPayload=payload(local||remote||fallback);const remotePayload=payload(remote||local||fallback);try{const saved=await invoke<BackendCard>('resolve_conflict',{path:state.boardPath,id:x.cardId,resolution:{choice,local:localPayload,remote:remotePayload,manual:choice==='manual'?localPayload:null,tombstone:!!deleteChoice,parentRevisionIds:x.parentRevisionIds}});state.cards=deleteChoice?state.cards.filter(v=>v.id!==x.cardId):state.cards.map(v=>v.id===x.cardId?normalize(saved):v);state.conflicts=state.conflicts.filter(conflict=>conflict.cardId!==x.cardId);state.error='';render();}catch(e){state.error='Conflict resolution failed: '+message(e);render();}}
 export async function poll(){if(!state.boardPath||cardMovePending)return;try{const events=await invoke<BackendEvent[]>('poll_watch_events');if(events.length){const bad=events.find(x=>!x.valid&&x.error);if(bad)state.error=bad.error!;const conflict=events.find(x=>x.error?.toLowerCase().includes('conflict'));if(conflict){const stem=conflict.path.split('/').pop()?.replace(/\.md$/,'')||'';const match=/(?:^|-)([0-7][0-9A-HJKMNP-TV-Z]{25})$/i.exec(stem);const id=match?.[1]||stem;const local=state.cards.find(c=>c.id===id);state.conflicts=[{cardId:id,local:local?JSON.stringify(local,null,2):'Local version unavailable',remote:conflict.error||'Remote version payload unavailable',base:'Base version unavailable',localCard:local,parentRevisionIds:local?.revision?[local.revision]:[]}];}await loadCards();}}catch(e){state.error='Unable to poll board changes: '+message(e);render();}}
 export function mergeDraftsIntoCards(cards:Card[]):Card[]{const boardDrafts=state.drafts[state.boardPath||''];if(!boardDrafts||Object.keys(boardDrafts).length===0)return cards;return cards.map(card=>{const draft=boardDrafts[card.id];if(!draft)return card;return {...card,title:draft.title??card.title,body:draft.body??card.body,column:draft.column??card.column,labels:draft.labels??card.labels,due:draft.due!==undefined?draft.due:card.due,start:draft.start!==undefined?draft.start:card.start,labelColors:draft.labelColors??card.labelColors};});}
 

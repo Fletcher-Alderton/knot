@@ -16,16 +16,16 @@ tauri-plugin-dialog = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-kanban-core = { path = "../../../crates/kanban-core" }
-kanban-store = { path = "../../../crates/kanban-store" }
-kanban-revisions = { path = "../../../crates/kanban-revisions" }
-kanban-merge = { path = "../../../crates/kanban-merge" }
-kanban-sync = { path = "../../../crates/kanban-sync" }
+knot-core = { path = "../../../crates/knot-core" }
+knot-store = { path = "../../../crates/knot-store" }
+knot-revisions = { path = "../../../crates/knot-revisions" }
+knot-merge = { path = "../../../crates/knot-merge" }
+knot-sync = { path = "../../../crates/knot-sync" }
 notify = "6"
 ulid = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
-kanban-iroh = { path = "../../../crates/kanban-iroh" }
+knot-iroh = { path = "../../../crates/knot-iroh" }
 iroh = "1.1"
 tokio = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }

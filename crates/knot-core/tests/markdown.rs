@@ -1,4 +1,4 @@
-use kanban_core::{Board, Card, ParseError, canonical_content_hash, validate_ulid};
+use knot_core::{Board, Card, ParseError, canonical_content_hash, validate_ulid};
 use serde_yaml::Value;
 
 const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
