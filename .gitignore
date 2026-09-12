@@ -1,5 +1,14 @@
 /target
+**/target
 node_modules/
+**/node_modules
 dist/
+**/dist
 *.log
 .DS_Store
+**/.DS_Store
+*.swp
+*.swo
+.env
+.env.*
+!.env.example

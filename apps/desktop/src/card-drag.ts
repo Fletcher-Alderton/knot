@@ -55,6 +55,7 @@ export function bindCardDragging(
       (el): el is HTMLElement =>
         el instanceof HTMLElement &&
         el.matches(".card") &&
+        !el.dataset.archived &&
         el.dataset.id !== id,
     );
   const unshiftedRect = (card: HTMLElement, zone: HTMLElement) => {
@@ -125,7 +126,9 @@ export function bindCardDragging(
     // Snapshot the entire list (including the dimmed source) before animating it.
     const physicalCards = Array.from(next.zone.children).filter(
       (card): card is HTMLElement =>
-        card instanceof HTMLElement && card.matches(".card"),
+        card instanceof HTMLElement &&
+        card.matches(".card") &&
+        !card.dataset.archived,
     );
     physicalCards.forEach((card) => unshiftedRect(card, next.zone));
     const index = cards.findIndex((card) => card.dataset.id === next.beforeId);
@@ -254,7 +257,7 @@ export function bindCardDragging(
     geometry.clear();
   };
 
-  root.querySelectorAll<HTMLElement>(".columns .card").forEach((card) => {
+  root.querySelectorAll<HTMLElement>(".columns .card:not([data-archived])").forEach((card) => {
     listen(card, "click", (event) => {
       if (suppressClick || gesture?.started) {
         event.preventDefault();

@@ -335,16 +335,29 @@ pub async fn list_openai_models(
 
 pub fn openai_access_check_url(raw_base_url: &str) -> Result<String, String> {
     let base_url = validate_openai_base_url(raw_base_url)?;
-    let authority = base_url.split_once("://").map(|(_, authority)| authority).unwrap_or_default();
-    let host = authority.split('/').next().unwrap_or_default().split('@').next_back().unwrap_or_default().split(':').next().unwrap_or_default();
-    let path = if host.eq_ignore_ascii_case("openrouter.ai") { "auth/key" } else { "models" };
+    let authority = base_url
+        .split_once("://")
+        .map(|(_, authority)| authority)
+        .unwrap_or_default();
+    let host = authority
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split('@')
+        .next_back()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    let path = if host.eq_ignore_ascii_case("openrouter.ai") {
+        "auth/key"
+    } else {
+        "models"
+    };
     Ok(format!("{base_url}/{path}"))
 }
 
-pub async fn check_openai_access(
-    raw_base_url: &str,
-    api_key: Option<&str>,
-) -> Result<(), String> {
+pub async fn check_openai_access(raw_base_url: &str, api_key: Option<&str>) -> Result<(), String> {
     let key = api_key
         .filter(|key| !key.trim().is_empty())
         .ok_or("an API key is required to check access")?;

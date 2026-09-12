@@ -222,10 +222,14 @@ pub fn markdown_links(body: &str) -> Vec<(String, String)> {
     let mut rest = body;
     while let Some(open) = rest.find("[") {
         let after_open = &rest[open + 1..];
-        let Some(close_rel) = after_open.find("](") else { break };
+        let Some(close_rel) = after_open.find("](") else {
+            break;
+        };
         let label = &after_open[..close_rel];
         let after_dest = &after_open[close_rel + 2..];
-        let Some(end) = after_dest.find(")") else { break };
+        let Some(end) = after_dest.find(")") else {
+            break;
+        };
         let destination = &after_dest[..end];
         if !label.is_empty() && !destination.is_empty() {
             out.push((label.to_owned(), destination.to_owned()));
@@ -244,6 +248,47 @@ pub fn canonical_content_hash(content: &str) -> String {
 }
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn sanitize_segment(s: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "card".to_string()
+    } else {
+        let mut truncated: String = trimmed.chars().take(60).collect();
+        truncated = truncated.trim_matches('-').to_string();
+        if truncated.is_empty() {
+            "card".to_string()
+        } else {
+            truncated
+        }
+    }
+}
+
+pub fn card_filename(column: &str, title: &str, id: &str) -> String {
+    let col = sanitize_segment(column);
+    let tit = sanitize_segment(title);
+    format!("{col}-{tit}-{id}.md")
+}
+
+pub fn extract_id_from_filename(stem: &str) -> &str {
+    if let Some((_, last)) = stem.rsplit_once('-')
+        && validate_ulid(last)
+    {
+        return last;
+    }
+    stem
 }
 
 #[cfg(test)]
@@ -274,17 +319,29 @@ mod tests {
     }
     #[test]
     fn label_colors_roundtrip_as_arbitrary_css() {
-        let mut fm = CardFrontmatter { id: ID.into(), title: "x".into(), column: "todo".into(), position: 1, ..Default::default() };
+        let mut fm = CardFrontmatter {
+            id: ID.into(),
+            title: "x".into(),
+            column: "todo".into(),
+            position: 1,
+            ..Default::default()
+        };
         fm.set_label_color("urgent", "color-mix(in srgb, red 40%, #123456)");
         let parsed = CardFrontmatter::parse(&fm.to_yaml().unwrap()).unwrap();
-        assert_eq!(parsed.label_colors()["urgent"], "color-mix(in srgb, red 40%, #123456)");
+        assert_eq!(
+            parsed.label_colors()["urgent"],
+            "color-mix(in srgb, red 40%, #123456)"
+        );
     }
     #[test]
     fn markdown_links_are_extracted_from_body() {
-        assert_eq!(markdown_links("See [issue](https://example.test/a) and [docs](/docs)."), vec![
-            ("issue".into(), "https://example.test/a".into()),
-            ("docs".into(), "/docs".into()),
-        ]);
+        assert_eq!(
+            markdown_links("See [issue](https://example.test/a) and [docs](/docs)."),
+            vec![
+                ("issue".into(), "https://example.test/a".into()),
+                ("docs".into(), "/docs".into()),
+            ]
+        );
     }
     #[test]
     fn hash_is_stable() {
@@ -314,5 +371,15 @@ mod tests {
         }
         .canonical_content_hash();
         assert_ne!(first, second);
+    }
+    #[test]
+    fn card_filename_and_id_extraction() {
+        let filename = card_filename("Group Project", "Sprint 4: Do / Check!", ID);
+        assert_eq!(filename, format!("Group-Project-Sprint-4-Do-Check-{ID}.md"));
+        assert_eq!(
+            extract_id_from_filename(&filename[..filename.len() - 3]),
+            ID
+        );
+        assert_eq!(extract_id_from_filename(ID), ID);
     }
 }

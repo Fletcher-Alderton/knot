@@ -94,10 +94,10 @@ fn parse_model_draft(raw: &str) -> Result<ParsedCardDraft, String> {
     if trimmed.is_empty() {
         return Err("model returned an empty response".into());
     }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if let Ok(draft) = serde_json::from_value(value) {
-            return Ok(draft);
-        }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Ok(draft) = serde_json::from_value(value)
+    {
+        return Ok(draft);
     }
     let mut start = None;
     let mut depth = 0usize;
@@ -315,21 +315,59 @@ fn read_board_attachment(path: &str, relative: &str) -> Result<Vec<u8>, String> 
     use std::io::Read;
     let root = fs::canonicalize(path).map_err(|e| e.to_string())?;
     let relative = Path::new(relative);
-    if relative.is_absolute() || relative.components().any(|c| !matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)) {
+    if relative.is_absolute()
+        || relative.components().any(|c| {
+            !matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+    {
         return Err("Attachment must be inside the board".into());
     }
     let file = fs::canonicalize(root.join(relative)).map_err(|e| e.to_string())?;
-    if !file.starts_with(&root) { return Err("Attachment must be inside the board".into()); }
-    let extension = file.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "svg" | "mp3" | "wav" | "ogg" | "m4a" | "mp4" | "webm" | "mov" | "pdf") {
+    if !file.starts_with(&root) {
+        return Err("Attachment must be inside the board".into());
+    }
+    let extension = file
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !matches!(
+        extension.as_str(),
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "avif"
+            | "bmp"
+            | "svg"
+            | "mp3"
+            | "wav"
+            | "ogg"
+            | "m4a"
+            | "mp4"
+            | "webm"
+            | "mov"
+            | "pdf"
+    ) {
         return Err("Unsupported attachment type".into());
     }
     let source = fs::File::open(file).map_err(|e| e.to_string())?;
-    if !source.metadata().map_err(|e| e.to_string())?.is_file() { return Err("Attachment is not a file".into()); }
+    if !source.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Attachment is not a file".into());
+    }
     let limit = 50 * 1024 * 1024;
     let mut bytes = Vec::new();
-    source.take(limit + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > limit { return Err("Attachment exceeds 50 MB".into()); }
+    source
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err("Attachment exceeds 50 MB".into());
+    }
     Ok(bytes)
 }
 
@@ -432,7 +470,11 @@ fn inspect(path: String) -> Result<BoardInfo, String> {
             .unwrap_or("My board")
             .into(),
         columns,
-        labels: b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(),
+        labels: b
+            .metadata
+            .get("labels")
+            .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+            .unwrap_or_default(),
         cards: s.list_cards().map_err(|e| e.to_string())?,
     })
 }
@@ -472,7 +514,12 @@ fn card_info(id: String, markdown: &str) -> Result<CardInfo, String> {
         label_colors,
         labels: c.frontmatter.labels,
         due: c.frontmatter.due,
-        start: c.frontmatter.extra.get("start").and_then(|v| v.as_str()).map(str::to_owned),
+        start: c
+            .frontmatter
+            .extra
+            .get("start")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
         updated_at: c
             .frontmatter
             .sync
@@ -513,23 +560,47 @@ fn load_revisions(path: &str) -> Result<Vec<Revision>, String> {
 }
 fn archived_cards(path: &str) -> Result<Vec<ArchivedCard>, String> {
     let revisions = load_revisions(path)?;
-    let parents: std::collections::HashSet<String> = revisions.iter().flat_map(|r| r.parents.iter().cloned()).collect();
-    let by_id: HashMap<String, Revision> = revisions.into_iter().map(|r| (r.revision_id.clone(), r)).collect();
+    let parents: std::collections::HashSet<String> = revisions
+        .iter()
+        .flat_map(|r| r.parents.iter().cloned())
+        .collect();
+    let by_id: HashMap<String, Revision> = revisions
+        .into_iter()
+        .map(|r| (r.revision_id.clone(), r))
+        .collect();
     let mut result = Vec::new();
-    for revision in by_id.values().filter(|r| r.tombstone && !parents.contains(&r.revision_id)) {
+    for revision in by_id
+        .values()
+        .filter(|r| r.tombstone && !parents.contains(&r.revision_id))
+    {
         let mut pending = revision.parents.clone();
         let mut snapshot = None;
         while let Some(parent) = pending.pop() {
             if let Some(candidate) = by_id.get(&parent) {
-                if candidate.tombstone { pending.extend(candidate.parents.clone()); }
-                else if candidate.snapshot.is_some() { snapshot = Some(candidate); break; }
+                if candidate.tombstone {
+                    pending.extend(candidate.parents.clone());
+                } else if candidate.snapshot.is_some() {
+                    snapshot = Some(candidate);
+                    break;
+                }
             }
         }
         let Some(snapshot) = snapshot else { continue };
-        let card = card_info(revision.card_id.clone(), snapshot.snapshot.as_deref().unwrap())?;
-        result.push(ArchivedCard { card, revision_id: revision.revision_id.clone(), archived_at: revision.timestamp });
+        let card = card_info(
+            revision.card_id.clone(),
+            snapshot.snapshot.as_deref().unwrap(),
+        )?;
+        result.push(ArchivedCard {
+            card,
+            revision_id: revision.revision_id.clone(),
+            archived_at: revision.timestamp,
+        });
     }
-    result.sort_by(|a, b| b.archived_at.cmp(&a.archived_at).then_with(|| a.card.title.cmp(&b.card.title)));
+    result.sort_by(|a, b| {
+        b.archived_at
+            .cmp(&a.archived_at)
+            .then_with(|| a.card.title.cmp(&b.card.title))
+    });
     Ok(result)
 }
 fn content_hash(text: &str) -> String {
@@ -542,7 +613,24 @@ fn revision_key(root: &Path, id: &str) -> String {
     format!("{}\0{}", root.to_string_lossy(), id)
 }
 
+static CARD_IO: Mutex<()> = Mutex::new(());
+
+fn tracked_write(store: &mut FsBoardStore, id: &str, markdown: &str) -> Result<(), String> {
+    let old = store.card_path(id).ok();
+    store.write_card(id, markdown).map_err(|e| e.to_string())?;
+    let path = store.card_path(id).map_err(|e| e.to_string())?;
+    let mut r = runtime().lock().unwrap();
+    r.self_hashes
+        .insert(path.to_string_lossy().into_owned(), content_hash(markdown));
+    if let Some(old) = old.filter(|old| old != &path) {
+        r.self_deletes.insert(old.to_string_lossy().into_owned());
+        r.self_hashes.remove(&old.to_string_lossy().into_owned());
+    }
+    Ok(())
+}
+
 fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
+    let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
     let is_card = path
         .parent()
         .and_then(|p| p.file_name())
@@ -618,8 +706,10 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
                         return;
                     }
                     if !duplicate {
-                        let old =
-                            fs::read_to_string(root.join("cards").join(format!("{id}.md"))).ok();
+                        let old = FsBoardStore::open(root)
+                            .ok()
+                            .and_then(|store| store.card_path(&id).ok())
+                            .and_then(|path| fs::read_to_string(path).ok());
                         let parents = old
                             .as_deref()
                             .and_then(|s| Card::parse(s).ok())
@@ -646,8 +736,9 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
             }
         }
     } else if matches!(kind, EventKind::Remove(_))
-        && let Some(id) = path.file_stem().and_then(|x| x.to_str())
+        && let Some(stem) = path.file_stem().and_then(|x| x.to_str())
     {
+        let id = kanban_store::extract_card_id(stem);
         let self_delete = runtime().lock().unwrap().self_deletes.remove(&path_string);
         if self_delete {
             return;
@@ -681,15 +772,21 @@ fn process_external_event(root: &Path, path: &Path, kind: &EventKind) {
     });
 }
 
-fn with_mutation(path: &str, id: &str, input: CardInput, parent_override: Option<Vec<String>>) -> Result<CardInfo, String> {
+fn with_mutation(
+    path: &str,
+    id: &str,
+    input: CardInput,
+    parent_override: Option<Vec<String>>,
+) -> Result<CardInfo, String> {
+    let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
     for (name, value) in [
         ("due", input.due.as_deref()),
         ("start", input.start.as_deref()),
     ] {
-        if let Some(value) = value {
-            if chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() || value.len() != 10 {
-                return Err(format!("{name} must be a valid YYYY-MM-DD date"));
-            }
+        if let Some(value) = value
+            && (chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() || value.len() != 10)
+        {
+            return Err(format!("{name} must be a valid YYYY-MM-DD date"));
         }
     }
     let mut s = board(path)?;
@@ -710,14 +807,23 @@ fn with_mutation(path: &str, id: &str, input: CardInput, parent_override: Option
             activity: vec![],
             extra: Default::default(),
         });
-    let parent = parent_override.unwrap_or_else(|| fm.sync.as_ref().and_then(|x| x.revision.clone()).into_iter().collect());
+    let parent = parent_override.unwrap_or_else(|| {
+        fm.sync
+            .as_ref()
+            .and_then(|x| x.revision.clone())
+            .into_iter()
+            .collect()
+    });
     let rid = revision();
     fm.title = input.title;
     fm.column = input.column;
     fm.position = input.position.unwrap_or(fm.position);
     fm.labels = input.labels;
     if !input.label_colors.is_empty() {
-        fm.extra.insert("label_colors".into(), serde_yaml::to_value(input.label_colors).map_err(|e| e.to_string())?);
+        fm.extra.insert(
+            "label_colors".into(),
+            serde_yaml::to_value(input.label_colors).map_err(|e| e.to_string())?,
+        );
     }
     if let Some(due) = input.due {
         fm.due = Some(due);
@@ -739,14 +845,19 @@ fn with_mutation(path: &str, id: &str, input: CardInput, parent_override: Option
     }
     .to_markdown()
     .map_err(|e| e.to_string())?;
-    s.write_card(id, &md).map_err(|e| e.to_string())?;
+    tracked_write(&mut s, id, &md)?;
     let canonical_root = Path::new(path)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(path));
     runtime().lock().unwrap().self_hashes.insert(
         canonical_root
             .join("cards")
-            .join(format!("{}.md", id))
+            .join(
+                s.card_path(id)
+                    .map_err(|e| e.to_string())?
+                    .file_name()
+                    .unwrap(),
+            )
             .to_string_lossy()
             .into_owned(),
         content_hash(&md),
@@ -865,6 +976,7 @@ fn load_repo(path: &str) -> Result<MemoryRevisionRepository, String> {
     Ok(repo)
 }
 fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, String> {
+    let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
     let mut n = 0;
     let mut store = board(path)?;
     let all = repo.all();
@@ -883,12 +995,18 @@ fn materialize(path: &str, repo: &MemoryRevisionRepository) -> Result<usize, Str
         let d = revisions[0].to_domain(chrono::Utc::now().timestamp() as u64);
         if d.tombstone {
             if store.read_card(&d.card_id).is_ok() {
+                if let Ok(path) = store.card_path(&d.card_id) {
+                    runtime()
+                        .lock()
+                        .unwrap()
+                        .self_deletes
+                        .insert(path.to_string_lossy().into_owned());
+                }
                 let _ = store.delete_card(&d.card_id);
                 n += 1;
             }
-        } else if let Some(s) = d.snapshot
-            && store.write_card(&d.card_id, &s).is_ok()
-        {
+        } else if let Some(s) = d.snapshot {
+            tracked_write(&mut store, &d.card_id, &s)?;
             n += 1;
         }
     }
@@ -1242,19 +1360,90 @@ title: My board
     }
     #[tauri::command]
     pub fn create_label(path: String, name: String, color: String) -> Result<BoardInfo, String> {
-        let name=name.trim().to_string(); let color=color.trim().to_string();
-        if name.is_empty() || name.len()>80 || color.is_empty() || color.len()>200 || color.chars().any(|c| matches!(c, '<'|'>'|';'|'\"')) { return Err("invalid label name or color".into()); }
-        save_board_metadata(&path, |b| { let mut labels: BTreeMap<String,String> = b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(); if labels.contains_key(&name) { return Err("label already exists".into()); } labels.insert(name.clone(),color.clone()); b.metadata.insert("labels".into(),serde_yaml::to_value(labels).map_err(|e|e.to_string())?); Ok(()) })
+        let name = name.trim().to_string();
+        let color = color.trim().to_string();
+        if name.is_empty()
+            || name.len() > 80
+            || color.is_empty()
+            || color.len() > 200
+            || color.chars().any(|c| matches!(c, '<' | '>' | ';' | '\"'))
+        {
+            return Err("invalid label name or color".into());
+        }
+        save_board_metadata(&path, |b| {
+            let mut labels: BTreeMap<String, String> = b
+                .metadata
+                .get("labels")
+                .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if labels.contains_key(&name) {
+                return Err("label already exists".into());
+            }
+            labels.insert(name.clone(), color.clone());
+            b.metadata.insert(
+                "labels".into(),
+                serde_yaml::to_value(labels).map_err(|e| e.to_string())?,
+            );
+            Ok(())
+        })
     }
     #[tauri::command]
-    pub fn update_label(path: String, name: String, new_name: String, color: String) -> Result<BoardInfo, String> {
-        let name=name.trim().to_string(); let new_name=new_name.trim().to_string(); let color=color.trim().to_string();
-        if name.is_empty() || new_name.is_empty() || new_name.len()>80 || color.is_empty() || color.len()>200 || color.contains(['<','>',';','\"']) { return Err("invalid label name or color".into()); }
-        save_board_metadata(&path, |b| { let mut labels: BTreeMap<String,String> = b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(); if !labels.contains_key(&name) { return Err("label not found".into()); } if name != new_name && labels.contains_key(&new_name) { return Err("label already exists".into()); } labels.remove(&name); labels.insert(new_name.clone(),color.clone()); b.metadata.insert("labels".into(),serde_yaml::to_value(labels).map_err(|e|e.to_string())?); Ok(()) })
+    pub fn update_label(
+        path: String,
+        name: String,
+        new_name: String,
+        color: String,
+    ) -> Result<BoardInfo, String> {
+        let name = name.trim().to_string();
+        let new_name = new_name.trim().to_string();
+        let color = color.trim().to_string();
+        if name.is_empty()
+            || new_name.is_empty()
+            || new_name.len() > 80
+            || color.is_empty()
+            || color.len() > 200
+            || color.contains(['<', '>', ';', '\"'])
+        {
+            return Err("invalid label name or color".into());
+        }
+        save_board_metadata(&path, |b| {
+            let mut labels: BTreeMap<String, String> = b
+                .metadata
+                .get("labels")
+                .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if !labels.contains_key(&name) {
+                return Err("label not found".into());
+            }
+            if name != new_name && labels.contains_key(&new_name) {
+                return Err("label already exists".into());
+            }
+            labels.remove(&name);
+            labels.insert(new_name.clone(), color.clone());
+            b.metadata.insert(
+                "labels".into(),
+                serde_yaml::to_value(labels).map_err(|e| e.to_string())?,
+            );
+            Ok(())
+        })
     }
     #[tauri::command]
     pub fn delete_label(path: String, name: String) -> Result<BoardInfo, String> {
-        save_board_metadata(&path, |b| { let mut labels: BTreeMap<String,String> = b.metadata.get("labels").and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default(); labels.remove(name.trim()).ok_or_else(|| "label not found".to_string())?; b.metadata.insert("labels".into(),serde_yaml::to_value(labels).map_err(|e|e.to_string())?); Ok(()) })
+        save_board_metadata(&path, |b| {
+            let mut labels: BTreeMap<String, String> = b
+                .metadata
+                .get("labels")
+                .and_then(|v| serde_yaml::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            labels
+                .remove(name.trim())
+                .ok_or_else(|| "label not found".to_string())?;
+            b.metadata.insert(
+                "labels".into(),
+                serde_yaml::to_value(labels).map_err(|e| e.to_string())?,
+            );
+            Ok(())
+        })
     }
     #[tauri::command]
     pub fn create_column(path: String, name: String) -> Result<BoardInfo, String> {
@@ -1378,6 +1567,7 @@ title: My board
                 .ok_or_else(|| "manual resolution payload is required".to_string())?,
             _ => return Err("choice must be local, remote, or manual".into()),
         };
+        let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
         let mut store = board(&path)?;
         let old = store.read_card(&id).map_err(|e| e.to_string())?;
         let mut fm = Card::parse(&old).map_err(|e| e.to_string())?.frontmatter;
@@ -1386,12 +1576,16 @@ title: My board
         fm.position = selected.position.unwrap_or(fm.position);
         fm.labels = selected.labels;
         if !selected.label_colors.is_empty() {
-            fm.extra.insert("label_colors".into(), serde_yaml::to_value(selected.label_colors).map_err(|e| e.to_string())?);
+            fm.extra.insert(
+                "label_colors".into(),
+                serde_yaml::to_value(selected.label_colors).map_err(|e| e.to_string())?,
+            );
         }
         fm.due = selected.due;
         fm.extra.remove("start");
         if let Some(start) = selected.start {
-            fm.extra.insert("start".into(), serde_yaml::Value::String(start));
+            fm.extra
+                .insert("start".into(), serde_yaml::Value::String(start));
         }
         let revision_id = revision();
         fm.sync = Some(SyncMetadata {
@@ -1407,9 +1601,7 @@ title: My board
         }
         .to_markdown()
         .map_err(|e| e.to_string())?;
-        store
-            .write_card(&id, &markdown)
-            .map_err(|e| e.to_string())?;
+        tracked_write(&mut store, &id, &markdown)?;
         let rev = snapshot(
             revision_id,
             id.clone(),
@@ -1445,22 +1637,21 @@ title: My board
             None,
         )
     }
-    /// Return a stable POSIX root-relative path suitable for sharing, never an OS path.
+    /// Return the canonical absolute filesystem path for a card.
     #[tauri::command]
     pub fn share_path(path: String, id: String) -> Result<String, String> {
         if !kanban_core::validate_ulid(&id) {
             return Err("card id must be a valid ULID".into());
         }
         let root = Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
-        let card = root.join("cards").join(format!("{id}.md"));
-        if !card.is_file() {
-            return Err("card not found".into());
-        }
-        Ok(format!("/cards/{id}.md"))
+        let store = FsBoardStore::open(&root).map_err(|e| e.to_string())?;
+        let card = store.card_path(&id).map_err(|e| e.to_string())?;
+        Ok(card.to_string_lossy().into_owned())
     }
 
     #[tauri::command]
     pub fn delete_card(path: String, id: String) -> Result<bool, String> {
+        let _io = CARD_IO.lock().unwrap_or_else(|e| e.into_inner());
         let mut s = board(&path)?;
         let old = s.read_card(&id).map_err(|e| e.to_string())?;
         let parsed = Card::parse(&old).map_err(|e| e.to_string())?;
@@ -1477,11 +1668,9 @@ title: My board
             chrono::Utc::now().timestamp() as u64,
         );
         persist_revision(Path::new(&path), &rev)?;
-        let delete_path = Path::new(&path)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(&path))
-            .join("cards")
-            .join(format!("{id}.md"))
+        let delete_path = s
+            .card_path(&id)
+            .unwrap_or_else(|_| Path::new(&path).join("cards").join(format!("{id}.md")))
             .to_string_lossy()
             .into_owned();
         runtime().lock().unwrap().self_deletes.insert(delete_path);
@@ -1742,11 +1931,17 @@ mod tests {
         fs::write(root.join("assets/test.png"), b"image").unwrap();
         fs::write(root.join("secret.txt"), b"secret").unwrap();
         let path = root.to_str().unwrap();
-        assert_eq!(read_board_attachment(path, "assets/test.png").unwrap(), b"image");
+        assert_eq!(
+            read_board_attachment(path, "assets/test.png").unwrap(),
+            b"image"
+        );
         assert!(read_board_attachment(path, "../secret.png").is_err());
         assert!(read_board_attachment(path, "secret.txt").is_err());
-        assert!(read_board_attachment(path, root.join("assets/test.png").to_str().unwrap()).is_err());
-        #[cfg(unix)] {
+        assert!(
+            read_board_attachment(path, root.join("assets/test.png").to_str().unwrap()).is_err()
+        );
+        #[cfg(unix)]
+        {
             std::os::unix::fs::symlink(std::env::temp_dir(), root.join("outside")).unwrap();
             assert!(read_board_attachment(path, "outside/missing.png").is_err());
         }
@@ -1925,7 +2120,11 @@ body";
                 .title,
             "T"
         );
-        let raw = fs::read_to_string(p.join("cards").join(format!("{}.md", c.id))).unwrap();
+        let raw = fs::read_to_string(
+            p.join("cards")
+                .join(kanban_store::card_filename("backlog", "T", &c.id)),
+        )
+        .unwrap();
         let parsed = Card::parse(&raw).unwrap();
         assert_eq!(parsed.frontmatter.due.as_deref(), Some("2026-09-12"));
         assert_eq!(
@@ -1951,7 +2150,11 @@ body";
             },
         )
         .unwrap();
-        let raw = fs::read_to_string(p.join("cards").join(format!("{}.md", c.id))).unwrap();
+        let raw = fs::read_to_string(
+            p.join("cards")
+                .join(kanban_store::card_filename("done", "U", &c.id)),
+        )
+        .unwrap();
         let parsed = Card::parse(&raw).unwrap();
         assert_eq!(parsed.frontmatter.due.as_deref(), Some("2026-09-12"));
         assert_eq!(
@@ -2047,9 +2250,31 @@ body";
         let p = std::env::temp_dir().join(format!("luna-share-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         create_board(p.to_string_lossy().into_owned()).unwrap();
-        let card = add_card(p.to_string_lossy().into_owned(), CardInput { title: "x".into(), body: "".into(), column: "backlog".into(), labels: vec![], label_colors: Default::default(), position: Some(1), due: None, start: None }).unwrap();
-        let expected = format!("/cards/{}.md", card.id);
-        assert_eq!(share_path(p.to_string_lossy().into_owned(), card.id).unwrap(), expected);
+        let card = add_card(
+            p.to_string_lossy().into_owned(),
+            CardInput {
+                title: "x".into(),
+                body: "".into(),
+                column: "backlog".into(),
+                labels: vec![],
+                label_colors: Default::default(),
+                position: Some(1),
+                due: None,
+                start: None,
+            },
+        )
+        .unwrap();
+        let expected = p
+            .canonicalize()
+            .unwrap()
+            .join("cards")
+            .join(kanban_store::card_filename("backlog", "x", &card.id))
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            share_path(p.to_string_lossy().into_owned(), card.id).unwrap(),
+            expected
+        );
         let _ = fs::remove_dir_all(p);
     }
     #[test]

@@ -143,13 +143,22 @@ pub fn compact_prompt(input: &str, columns: &str) -> String {
 }
 
 pub fn compact_prompt_at(
-    input: &str, columns: &str, timestamp: &str, timezone: &str, offset: &str,
+    input: &str,
+    columns: &str,
+    timestamp: &str,
+    timezone: &str,
+    offset: &str,
 ) -> String {
     compact_prompt_at_with_labels(input, columns, "", timestamp, timezone, offset)
 }
 
 pub fn compact_prompt_at_with_labels(
-    input: &str, columns: &str, labels: &str, timestamp: &str, timezone: &str, offset: &str,
+    input: &str,
+    columns: &str,
+    labels: &str,
+    timestamp: &str,
+    timezone: &str,
+    offset: &str,
 ) -> String {
     format!(
         "Extract one task as minified JSON only: t=clean title, b=notes or empty, c=column id, l=matching available labels without #, m=label-to-hex-color map, d=due date, s=start date. Remove metadata (#label, in:, due:, start:) and scheduling phrases from t; preserve wording and negation. Classify the task with zero or more labels from Available labels when their meaning matches; do not omit an applicable label and do not invent labels. Markdown links in notes/body are allowed and must be preserved. Dates are YYYY-MM-DD or null. Resolve every concrete scheduling phrase: due:/due/by/on/before/this/next/tomorrow/tonight goes in d unless explicitly described as a start; start:/start/begin/from goes in s; a range from X to Y puts X in s and Y in d. Use null only when that date is absent or genuinely vague. Default to the first column. Current time {timestamp} ({timezone}, UTC {offset}). A named weekday is the strictly upcoming occurrence; next week is the coming Monday; a yearless date is its next occurrence. Columns: {columns}. Available labels and colors: {labels}. Input: {input}"
@@ -240,7 +249,7 @@ pub fn deterministic_hints(input: &str, columns: &[(String, String)]) -> Determi
     let mut labels = Vec::new();
     model_input = model_input
         .split_whitespace()
-        .filter_map(|token| {
+        .filter(|token| {
             let candidate = token.trim_matches(|c: char| matches!(c, ',' | ';' | '.' | '!' | '?'));
             if let Some(label) = candidate
                 .strip_prefix('#')
@@ -249,9 +258,9 @@ pub fn deterministic_hints(input: &str, columns: &[(String, String)]) -> Determi
                 if !labels.iter().any(|existing: &String| existing == label) {
                     labels.push(label.to_string());
                 }
-                None
+                false
             } else {
-                Some(token)
+                true
             }
         })
         .collect::<Vec<_>>()
@@ -338,9 +347,11 @@ pub fn validate_output(value: &Value, column_ids: &[String]) -> Result<(), Strin
         || !object["labels"]
             .as_array()
             .is_some_and(|a| a.iter().all(Value::is_string))
-        || !object["label_colors"]
-            .as_object()
-            .is_some_and(|m| m.iter().all(|(label, color)| !label.is_empty() && color.as_str().is_some_and(valid_label_color)))
+        || !object["label_colors"].as_object().is_some_and(|m| {
+            m.iter().all(|(label, color)| {
+                !label.is_empty() && color.as_str().is_some_and(valid_label_color)
+            })
+        })
         || !object["warnings"]
             .as_array()
             .is_some_and(|a| a.iter().all(Value::is_string))
@@ -463,8 +474,12 @@ mod tests {
     #[test]
     fn compact_prompt_requires_dates_and_semantic_board_labels() {
         let p = compact_prompt_at_with_labels(
-            "fix bug tomorrow", "todo=Todo", "urgent=#ff0000, normal=#00ff00",
-            "2026-09-05T00:00:00+00:00", "UTC", "+00:00",
+            "fix bug tomorrow",
+            "todo=Todo",
+            "urgent=#ff0000, normal=#00ff00",
+            "2026-09-05T00:00:00+00:00",
+            "UTC",
+            "+00:00",
         );
         assert!(p.contains("Available labels and colors: urgent=#ff0000, normal=#00ff00"));
         assert!(p.contains("Classify the task with zero or more labels"));

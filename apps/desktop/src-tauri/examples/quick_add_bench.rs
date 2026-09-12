@@ -4,8 +4,10 @@
 //! implementation as the desktop application without making the application
 //! library (and its Tauri dependencies) part of the benchmark interface.
 
+#[allow(dead_code)]
 #[path = "../src/gguf_runtime.rs"]
 mod gguf_runtime;
+#[allow(dead_code)]
 #[path = "../src/quick_add.rs"]
 mod quick_add;
 
@@ -230,21 +232,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut done = HashSet::new();
     if let Ok(file) = File::open(&output_path) {
         for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if let (Some(id), Some(mode), Some(model), Some(dataset)) = (
+            if let Ok(value) = serde_json::from_str::<Value>(&line)
+                && let (Some(id), Some(mode), Some(model), Some(dataset)) = (
                     value.get("id").and_then(Value::as_str),
                     value.get("mode").and_then(Value::as_str),
                     value.get("model").and_then(Value::as_str),
                     value.get("dataset_sha256").and_then(Value::as_str),
-                ) {
-                    if model == model_name && dataset == dataset_sha256 {
-                        done.insert(format!(
-                            "{id}\0{mode}\0{model}\0{dataset}\0{}\0{}",
-                            value["prompt_sha256"].as_str().unwrap_or(""),
-                            value["schema_sha256"].as_str().unwrap_or("")
-                        ));
-                    }
-                }
+                )
+                && model == model_name
+                && dataset == dataset_sha256
+            {
+                done.insert(format!(
+                    "{id}\0{mode}\0{model}\0{dataset}\0{}\0{}",
+                    value["prompt_sha256"].as_str().unwrap_or(""),
+                    value["schema_sha256"].as_str().unwrap_or("")
+                ));
             }
         }
     }

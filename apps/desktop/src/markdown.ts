@@ -34,15 +34,16 @@ export function findNote(
   target: string,
   context: MarkdownContext,
 ): MarkdownNote | undefined {
-  const name = target
-    .split("#")[0]
-    .replace(/\.md$/i, "")
-    .replace(/^cards\//, "");
-  return context.notes?.find((note) =>
-    name
-      ? note.id === name || note.title.toLowerCase() === name.toLowerCase()
-      : note.id === context.currentId,
-  );
+  const [rawName] = target.split("#");
+  let name = rawName;
+  try { name = decodeURIComponent(name); } catch { /* Keep malformed links unresolved. */ }
+  name = name.replace(/\\/g, "/").replace(/^\/+/, "").replace(/^cards\//i, "").replace(/\.md$/i, "");
+  const ulid = /(?:^|-)[0-7][0-9A-HJKMNP-TV-Z]{25}$/i;
+  return context.notes?.find((note) => {
+    if (!name) return note.id === context.currentId;
+    return note.id === name || note.title.toLowerCase() === name.toLowerCase() ||
+      (ulid.test(name) && name.slice(-26).toLowerCase() === note.id.toLowerCase());
+  });
 }
 function section(body: string, fragment: string): string {
   if (!fragment) return body;

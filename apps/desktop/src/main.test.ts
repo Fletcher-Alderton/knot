@@ -1,11 +1,49 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll } from './main';
+import { state, normalize, applyBoardInfo, loadCards, loadArchivedCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll, formatDueDate, loadDueDateDisplayPreference, setDueDateDisplayPreference, DUE_DATE_DISPLAY_STORAGE_KEY } from './main';
+
+const testStorage=new Map<string,string>();
+Object.defineProperty(window,'localStorage',{configurable:true,value:{getItem:(key:string)=>testStorage.get(key)||null,setItem:(key:string,value:string)=>{testStorage.set(key,String(value));},removeItem:(key:string)=>{testStorage.delete(key);},clear:()=>testStorage.clear()}});
+beforeEach(()=>{testStorage.clear();state.dueDateDisplay='calendar';});
 
 describe('Kanban UI',()=>{
+ it('formats due dates as stable local-calendar countdowns',()=>{
+   const today=new Date(2026,8,10,23,55);
+   expect(formatDueDate('2026-09-10','countdown',today)).toBe('Today');
+   expect(formatDueDate('2026-09-11','countdown',today)).toBe('in 1 day');
+   expect(formatDueDate('2026-09-14','countdown',today)).toBe('in 4 days');
+   expect(formatDueDate('2026-09-09','countdown',today)).toBe('1 day overdue');
+   expect(formatDueDate('2026-09-06','countdown',today)).toBe('4 days overdue');
+   expect(formatDueDate('not-a-date','countdown',today)).toBe('not-a-date');
+   expect(formatDueDate('2026-09-11Tgarbage','countdown',today)).toBe('2026-09-11Tgarbage');
+   expect(formatDueDate('2026-09-11','countdown',new Date(2026,8,10,0,1))).toBe('in 1 day');
+   expect(formatDueDate('2026-03-09','countdown',new Date(2026,2,8,23,30))).toBe('in 1 day');
+   expect(formatDueDate('2026-11-01','countdown',new Date(2026,9,31,23,30))).toBe('in 1 day');
+ });
+ it('loads and persists the due-date display preference with calendar as fallback',()=>{
+   window.localStorage.clear();expect(loadDueDateDisplayPreference()).toBe('calendar');
+   window.localStorage.setItem(DUE_DATE_DISPLAY_STORAGE_KEY,'unexpected');expect(loadDueDateDisplayPreference()).toBe('calendar');
+   setDueDateDisplayPreference('countdown');expect(window.localStorage.getItem(DUE_DATE_DISPLAY_STORAGE_KEY)).toBe('countdown');
+   expect(state.dueDateDisplay).toBe('countdown');
+ });
+ it('renders accessible card-date settings and applies countdown mode to badges',()=>{
+   state.view='settings';state.dueDateDisplay='calendar';state.boardPath='/board';state.columns=[{id:'todo',name:'Todo'}];state.cards=[];window.localStorage.clear();render();
+   const section=document.querySelector('[data-settings-section="card-dates"]')!;
+   expect(section.textContent).toContain('Calendar date');expect(section.textContent).toContain('Days countdown');
+   expect(section.querySelector('[role="radiogroup"]')).not.toBeNull();
+   const countdown=section.querySelector<HTMLInputElement>('[data-due-date-display="countdown"]')!;countdown.click();
+   expect(state.dueDateDisplay).toBe('countdown');expect(localStorage.getItem(DUE_DATE_DISPLAY_STORAGE_KEY)).toBe('countdown');
+   const now=new Date();const iso=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+   state.view='board';state.cards=[{id:'due',title:'Due',body:'',column:'todo',labels:[],updatedAt:0,due:iso}];render();
+   const badge=document.querySelector<HTMLElement>('.due-date')!;expect(badge.textContent).toContain('Today');expect(badge.getAttribute('aria-label')).toBe('Due Today');expect(badge.getAttribute('datetime')).toBe(iso);
+ });
+ it('renders calendar due dates by default',()=>{
+   state.view='board';state.dueDateDisplay='calendar';state.boardPath='/board';state.columns=[{id:'todo',name:'Todo'}];state.cards=[{id:'due-calendar',title:'Due',body:'',column:'todo',labels:[],updatedAt:0,due:'2026-09-11'}];window.localStorage.clear();render();
+   expect(document.querySelector('.due-date')?.textContent).toContain('Sep 11');
+ });
  it('renders Markdown safely and preserves only safe links',()=>{const html=renderMarkdown('[docs](https://example.com) [bad](javascript:alert(1)) <script>alert(1)</script>');expect(html).toContain('href="https://example.com"');expect(html).not.toContain('javascript:');expect(html).not.toContain('<script>');});
  it('renders Obsidian task syntax as compact task elements',()=>{const html=renderMarkdown('- [x] Done\n- [ ] Todo');expect(html).toContain('class="task-checkbox is-checked"');expect(html).toContain('class="task-checkbox"');expect(html).not.toContain('<input');});
- it('shares POSIX root-relative card paths',()=>{expect(sharePath('\\Users\\me\\board\\card.md')).toBe('/Users/me/board/card.md');expect(sharePath('/Users/me/board/card.md','/Users/me')).toBe('/board/card.md');expect(shareCardPath('/Users/me/board','abc')).toBe('/cards/abc.md');});
+ it('shares POSIX root-relative card paths',()=>{expect(sharePath('\\Users\\me\\board\\card.md')).toBe('/Users/me/board/card.md');expect(sharePath('/Users/me/board/card.md','/Users/me')).toBe('/board/card.md');expect(shareCardPath('/Users/me/board','abc')).toBe('/Users/me/board/cards/abc.md');});
  it('escapes card content before rendering',()=>expect(renderCardText('<script>')).toBe('&lt;script&gt;'));
  it('normalizes backend card payloads',()=>expect(normalize({id:'a',title:'A',body:'B',column:'doing',labels:['x'],updated_at:'2024-01-01T00:00:00Z'})).toMatchObject({id:'a',column:'doing',labels:['x'],updatedAt:1704067200000}));
  it('keeps conflict choices explicit',()=>expect(['local','remote','manual']).toHaveLength(3));
@@ -50,6 +88,51 @@ it('pairs a serialized endpoint address for the current board',async()=>{
  it('shows one icon-only smart board action',()=>{
    state.boardPath='/board';state.view='board';render();
    expect(document.querySelector('#open')?.textContent?.trim()).toBe('＋');expect(document.querySelector('#create')).toBeNull();
+ });
+ it('shows archived cards inside their original columns with restore actions',()=>{
+   state.boardPath='/archive-placement';state.view='board';state.showArchived=true;state.archivedLoading=false;
+   state.columns=[{id:'todo',name:'Todo'},{id:'doing',name:'Doing'}];state.cards=[];
+   state.archivedCards=[
+     {card:{id:'archived-todo',title:'Archived todo',body:'Old todo',column:'todo',labels:[],updatedAt:0,position:1000},revisionId:'revision-todo',archivedAt:2},
+     {card:{id:'archived-doing',title:'Archived doing',body:'Old doing',column:'doing',labels:[],updatedAt:0,position:1000},revisionId:'revision-doing',archivedAt:1},
+   ];
+   render();
+   expect(document.querySelector('.archived-section')).toBeNull();
+   expect(document.querySelector('[data-drop-column="todo"] [data-id="archived-todo"]')).not.toBeNull();
+   expect(document.querySelector('[data-drop-column="doing"] [data-id="archived-doing"]')).not.toBeNull();
+   expect(document.querySelector('[data-id="archived-todo"]')?.getAttribute('data-archived')).toBe('true');
+   expect(document.querySelector('[data-id="archived-todo"] [data-restore-archived="revision-todo"]')).not.toBeNull();
+   document.querySelector<HTMLElement>('[data-id="archived-todo"]')!.click();
+   expect(state.selected).toBeNull();
+   state.showArchived=false;state.archivedCards=[];
+ });
+ it('refreshes archived cards after archiving from an open archive view',async()=>{
+   state.boardPath='/archive-refresh';state.view='board';state.showArchived=true;state.columns=[{id:'todo',name:'Todo'}];
+   state.cards=[{id:'archive-now',title:'Archive now',body:'Body',column:'todo',labels:[],updatedAt:0}];state.selected='archive-now';
+   const archived={card:{id:'archive-now',title:'Archive now',body:'Body',column:'todo',labels:[]},revision_id:'revision-now',archived_at:3};
+   const invoke=vi.fn(async(command:string)=>command==='delete_card'?true:command==='list_archived_cards'?[archived]:[]);
+   setInvokeForTests(invoke as any);render();document.querySelector<HTMLElement>('#archive')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_archived_cards',{path:'/archive-refresh'}));
+   expect(document.querySelector('[data-id="archive-now"][data-archived="true"]')).not.toBeNull();
+   setInvokeForTests(null);state.showArchived=false;state.archivedCards=[];
+ });
+ it('does not apply delayed archived results after switching boards',async()=>{
+   state.boardPath='/archive-old';state.archivedCards=[];state.archivedLoading=false;
+   let complete!:(value:unknown)=>void;
+   const pending=new Promise(resolve=>{complete=resolve;});
+   setInvokeForTests(vi.fn(async(command:string)=>command==='list_archived_cards'?pending:[] ) as any);
+   const loading=loadArchivedCards();state.boardPath='/archive-new';state.archivedCards=[];
+   complete([{card:{id:'old-card',title:'Old board',body:'',column:'todo',labels:[]},revision_id:'old-revision',archived_at:1}]);
+   await loading;
+   expect(state.archivedCards).toEqual([]);state.archivedLoading=false;setInvokeForTests(null);
+ });
+ it('extracts the ULID from composite filenames in conflict events',async()=>{
+   const id='01ARZ3NDEKTSV4RRFFQ69G0001';
+   state.boardPath='/conflict-board';state.cards=[{id,title:'Renamed',body:'',column:'todo',labels:[],updatedAt:0,revision:'parent'}];
+   const invoke=vi.fn(async(command:string)=>command==='poll_watch_events'?[{path:`/conflict-board/cards/todo-Renamed-${id}.md`,valid:false,error:'Conflict detected'}]:[]);
+   setInvokeForTests(invoke as any);await poll();
+   expect(state.conflicts[0]?.cardId).toBe(id);
+   setInvokeForTests(null);state.conflicts=[];state.cards=[];
  });
  it('keeps the board header outside the scrollable columns viewport',()=>{
    state.boardPath='/board';state.view='board';state.columns=[{id:'todo',name:'Todo'}];state.cards=[];render();
