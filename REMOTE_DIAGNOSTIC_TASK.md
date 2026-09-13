@@ -1,43 +1,83 @@
-# Remote Laptop Diagnostic Task
+# Remote laptop/device relay diagnostic
 
-Instructions for AI agent on other laptop:
+The diagnostic proves bounded transport/application reachability only. Sync trust, board authorization, pairing, and board convergence remain separate.
 
-## 1. Environment & Firewall Check
-Run these checks and write results to `diagnostic_report.md`:
-- Check OS and IP:
-  - macOS/Linux: `hostname && uname -a && ifconfig` (or `ip a`)
-- Check firewall status:
-  - macOS: `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate`
-  - Linux: `sudo ufw status` or `sudo iptables -L -n -v` (if applicable)
+A host must remain running and foregrounded. A suspended mobile app cannot answer diagnostics.
 
-## 2. Pull & Build Diagnostic Tool
-```bash
-git pull origin main
-cargo check -p knot-iroh --bin knot-peer-echo
+## Start host
+
+```sh
+cargo run -p knot-iroh --bin knot-peer-echo
 ```
 
-## 3. Run Echo Peer & Extract Address
-Run the diagnostic binary:
-```bash
-EXIT_AFTER_ADDR=1 cargo run -p knot-iroh --bin knot-peer-echo
-```
-Inspect the output JSON under `DEVICE ADDRESS (COPY THIS)`.
-Does `addrs` contain a `"Relay"` entry (e.g. `{"Relay":"https://aps1-1.relay.n0.iroh.link./"}`)?
-If not, why did relay connection / STUN fail? Check internet connectivity to `https://aps1-1.relay.n0.iroh.link./`.
+Copy the complete endpoint JSON printed by the command. Keep the host process alive. The default identity is fresh and ephemeral.
 
-## 4. Test Bidirectional Dial
-Run `knot-peer-echo` attempting to dial this laptop's relay endpoint:
-```bash
-cargo run -p knot-iroh --bin knot-peer-echo -- '{"id":"a9ec6045065487a42a9ee79c9db9dcabc85af1fc52837496baa08d4b120b23e8","addrs":[{"Relay":"https://aps1-1.relay.n0.iroh.link./"}]}'
-```
-Wait 20 seconds. Record whether output says:
-- `>>> Outbound connection SUCCESSFUL to: a9ec60450...` OR
-- `>>> Outbound connection error / timed out`
+Persisted app identity is explicit and should be used only while the Knot app is stopped:
 
-## 5. Output Deliverable
-Write findings to `diagnostic_report.md` at repo root with:
-- OS & network interface IP(s)
-- Firewall status
-- Printed Device Address JSON
-- Outbound connection result to `a9ec60450...`
-- Commit and push `diagnostic_report.md` back to git so both sides can inspect.
+```sh
+KNOT_USE_PERSISTED_IDENTITY=1 cargo run -p knot-iroh --bin knot-peer-echo
+```
+
+`EXIT_AFTER_ADDR=1` closes the endpoint after printing. Its address is not a live test target.
+
+## Dial from CLI
+
+```sh
+cargo run -p knot-iroh --bin knot-peer-echo -- --dial '<ENDPOINT_ADDRESS_JSON>'
+```
+
+Success returns JSON containing:
+
+```json
+{
+  "hello_acknowledged": true,
+  "relay_only_requested": true,
+  "path": "relay"
+}
+```
+
+The client parses the complete `EndpointAddr` JSON. Do not remove direct addresses manually; `diagnose_remote_peer` calls `clear_ip_transports()` so only relay transport can be selected. It rejects success unless Iroh reports the selected path as relay.
+
+## Dial from Knot
+
+1. Open **Settings → Sync → Device details**.
+2. Copy the complete host JSON into **Remote endpoint address JSON**.
+3. Tap **Diagnostic dial**.
+4. Require `hello_acknowledged: true`, `relay_only_requested: true`, and `path: relay`.
+
+The Tauri command calls:
+
+```rust
+knot_iroh::diagnose_remote_peer_json(
+    &json,
+    std::time::Duration::from_secs(20),
+).await
+```
+
+## Protocol properties
+
+- Dedicated ALPN: `knot-diagnostic/1`.
+- Independent ephemeral client endpoint.
+- Nonce-bound HELLO/ACK.
+- Small bounded frames.
+- One bounded client deadline covering bind and exchange.
+- Bounded inbound handler.
+- Endpoint cleanup on success, malformed reply, transport failure, and timeout.
+- No board access, trust mutation, or sync framing changes.
+
+## Automated tests
+
+Deterministic local tests run normally:
+
+```sh
+cargo test -p knot-iroh
+```
+
+The real relay-network test is ignored by default:
+
+```sh
+cargo test -p knot-iroh internet_diagnostic_proves_relay_only_path \
+  -- --ignored --nocapture
+```
+
+Ordinary CI does not depend on external relay availability. For a manual report, record OS, network type, firewall/VPN state, complete endpoint JSON, result JSON, and timeout/error output. Never record private identity material.

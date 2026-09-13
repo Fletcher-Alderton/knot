@@ -1,0 +1,13 @@
+**/xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
+Externals/
+assets/
+Pods/
+*.ipa
+*.xcarchive/
+*.app/
+*.dSYM/
+*.mobileprovision
+*.p12

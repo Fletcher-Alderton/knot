@@ -424,6 +424,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-ai")]
     #[test]
     fn schema_converts_to_llama_grammar() {
         let value = schema(&["todo".into()]);

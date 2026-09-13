@@ -8,9 +8,15 @@ use knot_iroh::{
 use knot_revisions::{Revision, snapshot, tombstone};
 use knot_store::{BoardStore, FsBoardStore};
 use knot_sync::{DeviceIdentity, MemoryRevisionRepository, RevisionRepository};
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+#[cfg(target_os = "ios")]
+use notify::PollWatcher;
+#[cfg(not(target_os = "ios"))]
+use notify::RecommendedWatcher;
+use notify::{Config, EventKind, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "ios")]
+use std::time::Duration;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fs,
@@ -19,7 +25,14 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
 };
+#[cfg(mobile)]
+use tauri::Manager;
 
+mod app_paths;
+#[cfg(feature = "local-ai")]
+mod gguf_runtime;
+#[cfg(not(feature = "local-ai"))]
+#[path = "gguf_runtime_stub.rs"]
 mod gguf_runtime;
 mod model_manager;
 pub mod quick_add;
@@ -237,16 +250,7 @@ fn valid_revision_id(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 fn config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("KNOT_CONFIG_PATH") {
-        return PathBuf::from(p);
-    }
-    if let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")) {
-        return PathBuf::from(base).join("Knot/install.json");
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(".config/knot/install.json")
+    app_paths::config_path()
 }
 fn load_config() -> InstallConfig {
     let p = config_path();
@@ -323,10 +327,15 @@ fn save_config(c: &InstallConfig) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "ios")]
+type RuntimeWatcher = PollWatcher;
+#[cfg(not(target_os = "ios"))]
+type RuntimeWatcher = RecommendedWatcher;
+
 struct Runtime {
     boards: HashMap<String, FsBoardStore>,
     events: VecDeque<WatchEvent>,
-    watchers: Vec<RecommendedWatcher>,
+    watchers: Vec<RuntimeWatcher>,
     watched_paths: std::collections::HashSet<String>,
     peers: std::collections::HashSet<String>,
     self_hashes: HashMap<String, String>,
@@ -510,11 +519,10 @@ fn board_metadata(path: &Path) -> Result<(knot_core::Board, String, Vec<BoardCol
         );
         changed = true;
     }
-    if !b
-        .metadata
+    if b.metadata
         .get("title")
         .and_then(|v| v.as_str())
-        .is_some_and(|v| !v.trim().is_empty())
+        .is_none_or(|v| v.trim().is_empty())
     {
         b.metadata
             .insert("title".into(), serde_yaml::Value::String("My board".into()));
@@ -1318,6 +1326,7 @@ mod commands {
     }
     #[tauri::command]
     pub fn list_local_models() -> Result<Vec<model_manager::LocalModel>, String> {
+        model_manager::require_local_ai()?;
         model_manager::list_local_models()
     }
     #[tauri::command]
@@ -1362,6 +1371,9 @@ mod commands {
             .provider
             .ok_or("configure a local NLP model first")?;
         let model = settings.model_id.ok_or("choose a model first")?;
+        if matches!(provider, model_manager::ModelProvider::HuggingFace) {
+            model_manager::require_local_ai()?;
+        }
         let info = inspect(path)?;
         let column_pairs = info
             .columns
@@ -1501,6 +1513,7 @@ mod commands {
         query: String,
         limit: Option<usize>,
     ) -> Result<Vec<model_manager::HuggingFaceModel>, String> {
+        model_manager::require_local_ai()?;
         model_manager::search_huggingface_models(&query, limit.unwrap_or(20)).await
     }
 
@@ -1510,6 +1523,7 @@ mod commands {
         repo_id: String,
         filename: String,
     ) -> Result<model_manager::LocalModel, String> {
+        model_manager::require_local_ai()?;
         model_manager::download_huggingface_gguf(&repo_id, &filename, |progress| {
             let _ = app.emit("model-download-progress", progress);
         })
@@ -1525,10 +1539,12 @@ mod commands {
     }
     #[tauri::command]
     pub fn load_local_model(id: String) -> Result<(), String> {
+        model_manager::require_local_ai()?;
         gguf_runtime::load_model(&local_model_path(&id)?, &model_manager::models_root())
     }
     #[tauri::command]
     pub fn unload_local_model() -> Result<bool, String> {
+        model_manager::require_local_ai()?;
         gguf_runtime::unload_model()
     }
     #[tauri::command]
@@ -1541,10 +1557,12 @@ mod commands {
     }
     #[tauri::command]
     pub fn delete_local_model(id: String) -> Result<bool, String> {
+        model_manager::require_local_ai()?;
         model_manager::delete_local_model(&id)
     }
     #[tauri::command]
     pub fn delete_all_local_models() -> Result<usize, String> {
+        model_manager::require_local_ai()?;
         model_manager::delete_all_local_models()
     }
     #[tauri::command]
@@ -2105,25 +2123,44 @@ mod commands {
             .to_string_lossy()
             .into_owned();
         {
-            let mut r = runtime().lock().unwrap();
-            if !r.watched_paths.insert(watch_key) {
+            let r = runtime().lock().unwrap();
+            if r.watched_paths.contains(&watch_key) {
                 return Ok(true);
             }
         }
         let event_root = root.clone();
         let callback_root = event_root.clone();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(ev) = res {
-                for p in ev.paths {
-                    process_external_event(&callback_root, &p, &ev.kind);
+        #[cfg(target_os = "ios")]
+        let mut watcher = PollWatcher::new(
+            move |res: notify::Result<notify::Event>| {
+                if let Ok(ev) = res {
+                    for p in ev.paths {
+                        process_external_event(&callback_root, &p, &ev.kind);
+                    }
                 }
-            }
-        })
+            },
+            Config::default().with_poll_interval(Duration::from_secs(2)),
+        )
+        .map_err(|e| e.to_string())?;
+        #[cfg(not(target_os = "ios"))]
+        let mut watcher = RecommendedWatcher::new(
+            move |res: notify::Result<notify::Event>| {
+                if let Ok(ev) = res {
+                    for p in ev.paths {
+                        process_external_event(&callback_root, &p, &ev.kind);
+                    }
+                }
+            },
+            Config::default(),
+        )
         .map_err(|e| e.to_string())?;
         watcher
             .watch(&event_root, RecursiveMode::Recursive)
             .map_err(|e| e.to_string())?;
-        runtime().lock().unwrap().watchers.push(watcher);
+        let mut r = runtime().lock().unwrap();
+        if r.watched_paths.insert(watch_key) {
+            r.watchers.push(watcher);
+        }
         Ok(true)
     }
     #[tauri::command]
@@ -2296,6 +2333,31 @@ mod commands {
         })
     }
     #[tauri::command]
+    pub fn app_capabilities() -> AppCapabilities {
+        AppCapabilities {
+            local_ai: cfg!(feature = "local-ai"),
+            mobile: cfg!(mobile),
+        }
+    }
+    #[tauri::command]
+    pub fn open_default_board() -> Result<BoardInfo, String> {
+        let path = app_paths::documents_dir()?.join("Default Board");
+        open_or_create_board(path.to_string_lossy().into_owned())
+    }
+    #[tauri::command]
+    pub async fn dial_remote_peer(address_json: String) -> Result<serde_json::Value, String> {
+        let result =
+            knot_iroh::diagnose_remote_peer_json(&address_json, std::time::Duration::from_secs(20))
+                .await
+                .map_err(|error| error.to_string())?;
+        Ok(serde_json::json!({
+            "peer": result.peer.to_string(),
+            "hello_acknowledged": result.hello_acknowledged,
+            "path": result.path,
+            "relay_only_requested": result.relay_only_requested,
+        }))
+    }
+    #[tauri::command]
     pub fn sync_status() -> SyncStatus {
         let r = runtime().lock().unwrap();
         SyncStatus {
@@ -2310,12 +2372,31 @@ mod commands {
         }
     }
 }
+#[derive(Debug, Clone, Serialize)]
+pub struct AppCapabilities {
+    pub local_ai: bool,
+    pub mobile: bool,
+}
+
 #[cfg(not(test))]
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|_app| {
+            #[cfg(mobile)]
+            {
+                let data = _app.path().app_data_dir().map_err(|e| e.to_string())?;
+                let documents = _app.path().document_dir().map_err(|e| e.to_string())?;
+                app_paths::initialize(data, documents).map_err(std::io::Error::other)?;
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::open_board,
+            commands::open_default_board,
+            commands::app_capabilities,
+            commands::dial_remote_peer,
             commands::create_board,
             commands::open_or_create_board,
             commands::rename_board,
@@ -2367,6 +2448,39 @@ pub fn run() {
 mod tests {
     use super::commands::*;
     use super::*;
+
+    #[test]
+    fn app_capabilities_reports_desktop_local_ai_state() {
+        let capabilities = app_capabilities();
+        assert!(!capabilities.mobile);
+        assert_eq!(capabilities.local_ai, cfg!(feature = "local-ai"));
+    }
+
+    #[test]
+    #[cfg(not(feature = "local-ai"))]
+    fn stub_commands_return_actionable_local_ai_errors() {
+        assert!(
+            load_local_model("missing".into())
+                .unwrap_err()
+                .contains("local AI is disabled")
+        );
+        assert!(
+            unload_local_model()
+                .unwrap_err()
+                .contains("local AI is disabled")
+        );
+        assert!(
+            inspect_local_model("missing".into())
+                .unwrap_err()
+                .contains("local AI is disabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn dial_remote_peer_rejects_malformed_diagnostic_input() {
+        let error = dial_remote_peer("not-json".into()).await.unwrap_err();
+        assert!(error.contains("invalid EndpointAddr JSON"));
+    }
 
     #[test]
     fn read_board_attachment_confines_media_to_board() {
@@ -2818,6 +2932,16 @@ body";
         assert!(FsBoardStore::open(&p).unwrap().read_card(card_id).is_err());
         let _ = fs::remove_dir_all(p);
     }
+    #[test]
+    fn failed_watch_does_not_poison_retry() {
+        let p = std::env::temp_dir().join(format!("knot-watch-retry-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        assert!(watch_board(p.to_string_lossy().into()).is_err());
+        fs::create_dir_all(&p).unwrap();
+        assert!(watch_board(p.to_string_lossy().into()).unwrap());
+        let _ = fs::remove_dir_all(p);
+    }
+
     #[test]
     fn watcher_reports_malformed_external_edit() {
         let p = std::env::temp_dir().join(format!("knot-watch-{}", std::process::id()));

@@ -9,6 +9,14 @@ dist/
 **/.DS_Store
 *.swp
 *.swo
+*.ipa
+*.xcarchive/
+*.app/
+*.dSYM/
+*.mobileprovision
+*.p12
+*.xcuserstate
+diagnostic_report.md
 .env
 .env.*
 !.env.example

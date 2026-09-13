@@ -782,7 +782,7 @@ mod tests {
     fn rev(id: &str, parents: Vec<&str>, text: String) -> Revision {
         Revision {
             id: id.into(),
-            card_id: "card".into(),
+            card_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
             parents: parents.into_iter().map(str::to_string).collect(),
             content: text,
             tombstone: false,
@@ -834,7 +834,7 @@ mod tests {
                 sync_once(&mut at, ar.clone(), &a_id, &b_id.endpoint_id, "board"),
                 sync_once(&mut bt, br.clone(), &b_id, &a_id.endpoint_id, "board")
             );
-            assert!(x.is_ok() && y.is_ok());
+            assert!(x.is_ok() && y.is_ok(), "left={x:?}, right={y:?}");
             assert!(br.lock().await.get("a").is_some());
         }
         assert_eq!(ar.lock().await.revisions.len(), 1);

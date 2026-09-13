@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, normalize, applyBoardInfo, loadCards, loadArchivedCards, pairAddress, syncNow, openBoard, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll, formatDueDate, loadDueDateDisplayPreference, setDueDateDisplayPreference, DUE_DATE_DISPLAY_STORAGE_KEY } from './main';
+import { state, capabilities, diagnostics, normalize, applyBoardInfo, loadCards, loadArchivedCards, pairAddress, syncNow, openBoard, openDefaultBoard, dialRemotePeer, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadCapabilities, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll, formatDueDate, loadDueDateDisplayPreference, setDueDateDisplayPreference, DUE_DATE_DISPLAY_STORAGE_KEY } from './main';
 
 const testStorage=new Map<string,string>();
 Object.defineProperty(window,'localStorage',{configurable:true,value:{getItem:(key:string)=>testStorage.get(key)||null,setItem:(key:string,value:string)=>{testStorage.set(key,String(value));},removeItem:(key:string)=>{testStorage.delete(key);},clear:()=>testStorage.clear()}});
-beforeEach(()=>{testStorage.clear();state.dueDateDisplay='calendar';});
+beforeEach(async()=>{testStorage.clear();state.dueDateDisplay='calendar';capabilities.local_ai=true;capabilities.mobile=false;setInvokeForTests(vi.fn(async(command:string)=>command==='app_capabilities'?{local_ai:true,mobile:false}:[] ) as any);await loadCapabilities();});
 
 describe('Kanban UI',()=>{
  it('formats due dates as stable local-calendar countdowns',()=>{
@@ -423,6 +423,34 @@ it('pairs a serialized endpoint address for the current board',async()=>{
    await vi.waitFor(()=>expect(state.cards).toHaveLength(1));
    expect(invoke).toHaveBeenCalledWith('add_card',{path:'/board',input:{title:'Task',body:'',column:'backlog',labels:[],due:'2026-09-06',start:'2026-09-05',position:1000}});
    setInvokeForTests(null);
+ });
+
+ it('local_ai false skips embedded model commands while remote providers remain available',async()=>{
+   capabilities.local_ai=false;state.view='settings';state.modelSettings={provider:'ollama'};
+   const invoke=vi.fn(async(command:string)=>{
+    if(command==='app_capabilities')return {local_ai:false,mobile:false};
+    if(command==='model_settings')return {provider:'ollama',model_id:'qwen',ollama_url:'http://127.0.0.1:11434'};
+    if(command==='list_ollama_models')return [{name:'qwen',size_bytes:1}];
+    throw new Error(command);
+   });
+   setInvokeForTests(invoke as any);await loadCapabilities();await loadModels();render();
+   expect(invoke).toHaveBeenCalledWith('model_settings',undefined);
+   expect(invoke).toHaveBeenCalledWith('list_ollama_models',{url:'http://127.0.0.1:11434'});
+   expect(invoke).not.toHaveBeenCalledWith('list_local_models');
+   expect(document.querySelector('[data-model-provider="ollama"]')).not.toBeNull();setInvokeForTests(null);
+ });
+ it('picker cancellation leaves current board unchanged',async()=>{state.boardPath='/current';state.cards=[{id:'current',title:'Current',body:'',column:'todo',labels:[],updatedAt:0}];const invoke=vi.fn();setInvokeForTests(invoke as any);setDirectoryPickerForTests(async()=>null);await openBoard();expect(state.boardPath).toBe('/current');expect(state.cards[0].id).toBe('current');expect(invoke).not.toHaveBeenCalled();setDirectoryPickerForTests(null);setInvokeForTests(null);
+ });
+ it('mobile capability opens default board and loads cards',async()=>{
+   capabilities.mobile=true;const info={path:'/mobile-board',board_id:'mobile-id',title:'Mobile',columns:[{id:'todo',name:'Todo'}],cards:[]};const invoke=vi.fn(async(command:string)=>{if(command==='open_default_board')return info;if(command==='watch_board')return true;if(command==='list_cards')return [{id:'mobile-card',title:'Card',body:'',column:'todo',labels:[]}];if(command==='sync_status')return {connected:false,trusted_peers:0,connection:'offline'};if(command==='endpoint_info')return {endpoint_id:'local',address:'local'};if(command==='list_trusted_peers')return [];throw new Error(command)});setInvokeForTests(invoke as any);await openDefaultBoard();expect(state.boardPath).toBe('/mobile-board');expect(state.cards[0].id).toBe('mobile-card');setInvokeForTests(null);
+ });
+ it('watch rejection does not clear mobile board',async()=>{
+   state.boardPath='/existing';state.cards=[{id:'old',title:'Old',body:'',column:'todo',labels:[],updatedAt:0}];const invoke=vi.fn(async(command:string)=>{if(command==='open_default_board')return {path:'/mobile-board',board_id:'id',title:'Mobile',columns:[{id:'todo',name:'Todo'}],cards:[]};if(command==='watch_board')throw new Error('watch unavailable');if(command==='list_cards')return [{id:'kept',title:'Kept',body:'',column:'todo',labels:[]}];if(command==='sync_status')return {connected:false,trusted_peers:0,connection:'offline'};if(command==='endpoint_info')return {endpoint_id:'local',address:'local'};if(command==='list_trusted_peers')return [];throw new Error(command)});setInvokeForTests(invoke as any);await openDefaultBoard();expect(state.boardPath).toBe('/mobile-board');expect(state.cards[0].id).toBe('kept');expect(state.error).toBe('');setInvokeForTests(null);
+ });
+ it('diagnostic JSON button invokes dial and displays success and error',async()=>{
+   state.view='settings';state.boardPath='/board';const invoke=vi.fn(async(command:string,args:any)=>{if(command==='dial_remote_peer')return {ok:true,address:args.addressJson};throw new Error(command)});setInvokeForTests(invoke as any);render();const input=document.querySelector<HTMLTextAreaElement>('#remote-endpoint')!;input.value='{"id":"peer"}';document.querySelector<HTMLElement>('#dial-remote')!.click();await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('dial_remote_peer',{addressJson:'{"id":"peer"}'}));await vi.waitFor(()=>expect(document.querySelector('.remote-diagnostic .notice')?.textContent).toContain('peer'));setInvokeForTests((async(command:string)=>{if(command==='dial_remote_peer')throw new Error('dial failed');throw new Error(command)}) as any);await dialRemotePeer('{"id":"bad"}');expect(document.querySelector('.error')?.textContent).toContain('dial failed');setInvokeForTests(null);
+ });
+ it('handles disabled persisted Hugging Face model with actionable controls',()=>{state.view='settings';state.modelSettings={provider:'huggingface',model_id:'missing.gguf'};state.localModels=[];render();expect(document.querySelector<HTMLInputElement>('#keep-model-loaded')?.disabled).toBe(true);expect(document.querySelector('.model-setup-status')?.textContent).toContain('missing.gguf');expect(document.querySelector('[data-install-recommended]')).not.toBeNull();
  });
 });
 

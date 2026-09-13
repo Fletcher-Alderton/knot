@@ -1,34 +1,33 @@
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::time::Duration;
-use iroh::EndpointAddr;
-use knot_iroh::{ConnectedIrohTransport, IrohTransport, secret_key_from_bytes};
-use knot_sync::PeerTransport;
+//! Live diagnostic host, or a one-shot acknowledged relay-only client.
+use knot_iroh::{DIAGNOSTIC_ALPN, IrohTransport, diagnose_remote_peer_json, secret_key_from_bytes};
+use std::{env, fs, path::PathBuf, time::Duration};
 
 fn find_config_key() -> Option<iroh::SecretKey> {
     let home = env::var_os("HOME").map(PathBuf::from);
-    let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA")).map(PathBuf::from);
-
+    let appdata = env::var_os("LOCALAPPDATA")
+        .or_else(|| env::var_os("APPDATA"))
+        .map(PathBuf::from);
     let candidates = [
+        env::var_os("KNOT_CONFIG_PATH").map(PathBuf::from),
         home.as_ref().map(|h| h.join(".config/knot/install.json")),
         appdata.as_ref().map(|a| a.join("Knot/install.json")),
     ];
-
     for path in candidates.into_iter().flatten() {
-        if let Ok(bytes) = fs::read(&path) {
-            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                if let Some(key_arr) = val.get("secret_key").and_then(|v| v.as_array()) {
-                    let key_bytes: Vec<u8> = key_arr
-                        .iter()
-                        .filter_map(|x| x.as_u64().map(|n| n as u8))
-                        .collect();
-                    if let Ok(key) = secret_key_from_bytes(&key_bytes) {
-                        println!("Loaded existing Knot secret key from: {}", path.display());
-                        return Some(key);
-                    }
-                }
-            }
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(array) = value.get("secret_key").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let key_bytes: Option<Vec<u8>> = array
+            .iter()
+            .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
+            .collect();
+        if let Some(bytes) = key_bytes
+            && let Ok(key) = secret_key_from_bytes(&bytes)
+        {
+            return Some(key);
         }
     }
     None
@@ -36,85 +35,61 @@ fn find_config_key() -> Option<iroh::SecretKey> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Knot Iroh Diagnostic Tool ===");
-
-    let args: Vec<String> = env::args().collect();
-    let maybe_target = args.get(1);
-
-    // Bind transport with production relay presets
-    let transport = if let Some(key) = find_config_key() {
-        IrohTransport::bind_with_secret_key(key).await?
-    } else {
-        println!("No install.json found, creating ephemeral identity...");
-        IrohTransport::bind().await?
+    let args: Vec<String> = env::args().skip(1).collect();
+    let target = match args.as_slice() {
+        [] => None,
+        [flag] if flag == "--help" || flag == "-h" => {
+            println!(
+                "Usage: knot-peer-echo [--dial ADDRESS_JSON]\n\nWithout arguments, serves knot-diagnostic/1 until Ctrl+C.\n--dial validates a live peer with an acknowledged relay-only HELLO and exits.\nIdentities are ephemeral. KNOT_USE_PERSISTED_IDENTITY opts the host into an existing app identity; never run both concurrently.\nEXIT_AFTER_ADDR prints an address then closes it; that address is NOT a live test target."
+            );
+            return Ok(());
+        }
+        [flag, address] if flag == "--dial" => Some(address),
+        [address] if !address.starts_with('-') => Some(address),
+        _ => return Err("use knot-peer-echo --help for usage".into()),
     };
-
-    println!("Local Endpoint ID: {}", transport.endpoint_id());
-    println!("Waiting 5s for relay connection and STUN address discovery...");
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let addr = transport.endpoint().addr();
-    let addr_json = serde_json::to_string(&addr)?;
-    println!("\n================ DEVICE ADDRESS (COPY THIS) ================");
-    println!("{}", addr_json);
-    println!("============================================================\n");
-
-    if let Some(target_str) = maybe_target {
-        println!("Target address provided, attempting outbound dial to peer...");
-        let target_addr: EndpointAddr = serde_json::from_str(target_str)?;
-        println!("Dialing: {}", target_addr.id);
-
-        let t_clone = transport.clone();
-        tokio::spawn(async move {
-            match tokio::time::timeout(
-                Duration::from_secs(20),
-                ConnectedIrohTransport::connect(t_clone.clone(), target_addr),
-            )
-            .await
-            {
-                Ok(Ok(mut wire)) => {
-                    println!("\n>>> Outbound connection SUCCESSFUL to: {}!", wire.peer());
-                    let hello = knot_sync::WireMessage::new(knot_sync::Message::Hello(knot_sync::Hello {
-                        device_id: "diagnostic-client".into(),
-                        endpoint_id: t_clone.endpoint_id().to_string(),
-                    }));
-                    println!("Sending test HELLO message...");
-                    let _ = wire.send(hello).await;
-                    tokio::spawn(async move {
-                        while let Ok(msg) = wire.recv().await {
-                            println!("Outbound wire received message: {:?}", msg);
-                        }
-                    });
-                }
-                Ok(Err(e)) => println!("\n>>> Outbound connection error: {:?}", e),
-                Err(_) => println!("\n>>> Outbound connection timed out after 20s."),
-            }
-        });
-    }
-
-    if env::var("EXIT_AFTER_ADDR").is_ok() {
-        println!("EXIT_AFTER_ADDR set, shutting down...");
-        transport.endpoint().close().await;
+    if let Some(address) = target {
+        let result = diagnose_remote_peer_json(address, Duration::from_secs(30)).await?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "peer": result.peer.to_string(),
+                "hello_acknowledged": result.hello_acknowledged,
+                "relay_only_requested": result.relay_only_requested,
+                "path": result.path,
+            })
+        );
         return Ok(());
     }
 
-    println!("Listening for incoming peer connections (Press Ctrl+C to stop)...");
-    loop {
-        match transport.accept_connected().await {
-            Ok(mut wire) => {
-                let peer_id = wire.peer();
-                println!("\n>>> INCOMING CONNECTION ACCEPTED from peer: {}!", peer_id);
-                tokio::spawn(async move {
-                    while let Ok(msg) = wire.recv().await {
-                        println!("Received wire message from {}: {:?}", peer_id, msg);
-                    }
-                    println!("Peer {} disconnected.", peer_id);
-                });
-            }
-            Err(e) => {
-                println!("Accept error: {:?}", e);
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        }
+    // Diagnostic host has no sync ALPN and cannot access or authorize a board.
+    let mut builder =
+        iroh::Endpoint::builder(iroh::endpoint::presets::N0).alpns(vec![DIAGNOSTIC_ALPN.to_vec()]);
+    if env::var_os("KNOT_USE_PERSISTED_IDENTITY").is_some() {
+        let key = find_config_key().ok_or("persisted identity requested but no valid key found")?;
+        eprintln!("Warning: stop the Knot app before reusing its persisted identity.");
+        builder = builder.secret_key(key);
     }
+    let endpoint = tokio::time::timeout(Duration::from_secs(10), builder.bind()).await??;
+    let host = IrohTransport::from_endpoint(endpoint);
+    if tokio::time::timeout(Duration::from_secs(30), host.endpoint().online())
+        .await
+        .is_err()
+    {
+        host.endpoint().close().await;
+        return Err("relay readiness timed out".into());
+    }
+    println!("=== Knot diagnostic host (keep this process running) ===");
+    println!("{}", serde_json::to_string(&host.endpoint().addr())?);
+    if env::var_os("EXIT_AFTER_ADDR").is_some() {
+        eprintln!("EXIT_AFTER_ADDR: closing endpoint; printed address will not remain reachable.");
+    } else {
+        eprintln!("Serving acknowledged diagnostics; Ctrl+C stops host.");
+        let result = tokio::signal::ctrl_c().await;
+        host.endpoint().close().await;
+        result?;
+        return Ok(());
+    }
+    host.endpoint().close().await;
+    Ok(())
 }

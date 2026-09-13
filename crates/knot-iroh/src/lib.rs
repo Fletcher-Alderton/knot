@@ -7,11 +7,44 @@ use thiserror::Error;
 use tokio::{
     io::AsyncReadExt,
     sync::{Mutex, mpsc},
+    time::Duration,
 };
 
 pub const ALPN: &[u8] = b"knot-sync/1";
+pub const DIAGNOSTIC_ALPN: &[u8] = b"knot-diagnostic/1";
 pub const PROTOCOL_VERSION: u8 = 1;
+const DIAGNOSTIC_HELLO: &[u8] = b"KNOT-DIAGNOSTIC/1 HELLO";
+const DIAGNOSTIC_ACK: &[u8] = b"KNOT-DIAGNOSTIC/1 ACK";
 pub const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
+
+/// Result of a bounded, application-level remote diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticResult {
+    pub peer: EndpointId,
+    pub hello_acknowledged: bool,
+    pub relay_only_requested: bool,
+    pub path: String,
+}
+
+/// Parse complete EndpointAddr JSON and perform an isolated HELLO round trip.
+/// Endpoint uses ephemeral identity and is closed before return.
+pub async fn diagnose_remote_peer_json(
+    json: &str,
+    limit: Duration,
+) -> Result<DiagnosticResult, TransportError> {
+    let addr: EndpointAddr = serde_json::from_str(json)
+        .map_err(|e| TransportError::Malformed(format!("invalid EndpointAddr JSON: {e}")))?;
+    diagnose_remote_peer(addr, limit).await
+}
+
+mod diagnostic;
+
+pub async fn diagnose_remote_peer(
+    addr: EndpointAddr,
+    limit: Duration,
+) -> Result<DiagnosticResult, TransportError> {
+    diagnostic::run(addr, limit).await
+}
 
 /// Generate a cryptographically random identity for first-run persistence.
 pub fn generate_secret_key() -> SecretKey {
@@ -82,7 +115,7 @@ impl IrohTransport {
     /// connectivity, allowing peers behind NATs or on different networks to connect.
     pub async fn bind() -> Result<Self, iroh::endpoint::BindError> {
         let ep = Endpoint::builder(iroh::endpoint::presets::N0)
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), DIAGNOSTIC_ALPN.to_vec()])
             .bind()
             .await?;
         Ok(Self::from_endpoint(ep))
@@ -96,7 +129,7 @@ impl IrohTransport {
     ) -> Result<Self, iroh::endpoint::BindError> {
         let ep = Endpoint::builder(iroh::endpoint::presets::N0)
             .secret_key(secret_key)
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), DIAGNOSTIC_ALPN.to_vec()])
             .bind()
             .await?;
         Ok(Self::from_endpoint(ep))
@@ -108,7 +141,7 @@ impl IrohTransport {
     /// tests, but it must not be used when cross-network reachability is required.
     pub async fn bind_local() -> Result<Self, iroh::endpoint::BindError> {
         let ep = Endpoint::builder(iroh::endpoint::presets::N0DisableRelay)
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), DIAGNOSTIC_ALPN.to_vec()])
             .bind()
             .await?;
         Ok(Self::from_endpoint(ep))
@@ -120,7 +153,7 @@ impl IrohTransport {
     ) -> Result<Self, iroh::endpoint::BindError> {
         let ep = Endpoint::builder(iroh::endpoint::presets::N0DisableRelay)
             .secret_key(secret_key)
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), DIAGNOSTIC_ALPN.to_vec()])
             .bind()
             .await?;
         Ok(Self::from_endpoint(ep))
@@ -151,9 +184,14 @@ impl IrohTransport {
                         }
                     };
                     let peer = conn.remote_id();
+                    if conn.alpn() == DIAGNOSTIC_ALPN {
+                        diagnostic::serve(&conn).await;
+                        return;
+                    }
+                    // Sync ALPN framing remains unchanged; no application ACK here.
                     // The first stream is always a versioned HELLO; reject the connection
                     // before exposing any application data if it is absent or malformed.
-                    let (_w, mut r) = match conn.accept_bi().await {
+                    let (mut w, mut r) = match conn.accept_bi().await {
                         Ok(x) => x,
                         Err(_) => {
                             let _ = tx.send(Err(TransportError::Disconnected)).await;
@@ -162,10 +200,11 @@ impl IrohTransport {
                     };
                     let first = read_frame(&mut r).await.and_then(|p| validate_hello(&p));
                     if let Err(error) = first {
+                        let _ = w.finish();
                         let _ = tx.send(Err(error)).await;
                         return;
                     }
-                    // Publish only authenticated peers that completed our transport HELLO.
+                    // Publish only peers that completed transport HELLO.
                     let (peer_tx, peer_rx) = mpsc::unbounded_channel();
                     connection_inner
                         .peers
@@ -299,7 +338,7 @@ impl RawPeerTransport for IrohTransport {
     async fn connect(&self, addr: EndpointAddr) -> Result<EndpointId, TransportError> {
         let id = addr.id;
         let conn = Arc::new(self.inner.endpoint.connect(addr.clone(), ALPN).await?);
-        let (mut w, _r) = conn
+        let (mut w, _recv) = conn
             .open_bi()
             .await
             .map_err(|_| TransportError::Disconnected)?;
@@ -334,7 +373,7 @@ impl RawPeerTransport for IrohTransport {
             peers.get(&peer).cloned()
         }
         .ok_or(TransportError::Disconnected)?;
-        let (mut w, _r) = conn
+        let (mut w, _recv) = conn
             .open_bi()
             .await
             .map_err(|_| TransportError::Disconnected)?;

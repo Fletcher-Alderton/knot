@@ -32,6 +32,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); }
+
+
 body { color: var(--text); }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; border: 0; background: none; color: inherit; }
@@ -559,3 +561,51 @@ body:has(.card.dragging) .card:hover { transform: none; }
 .due-date-option strong { font-size: 12px; }
 .due-date-option small { color: var(--text-muted); font-size: 10px; line-height: 1.4; }
 @media (max-width: 520px) { .api-connection { grid-template-columns: minmax(0,1fr); } .due-date-options { grid-template-columns: 1fr; } }
+
+/* Keep these after desktop layout rules so viewport-fit=cover stays usable on iOS. */
+.workspace {
+  padding-top: calc(34px + env(safe-area-inset-top, 0px));
+  padding-left: max(36px, env(safe-area-inset-left, 0px));
+  padding-right: max(36px, env(safe-area-inset-right, 0px));
+  padding-bottom: calc(34px + env(safe-area-inset-bottom, 0px));
+}
+.workspace[data-page="board"] { height: 100dvh; max-height: 100dvh; padding: 0; }
+.workspace[data-page="board"] .toolbar {
+  padding-top: calc(34px + env(safe-area-inset-top, 0px));
+  padding-left: max(36px, env(safe-area-inset-left, 0px));
+  padding-right: max(36px, env(safe-area-inset-right, 0px));
+}
+.workspace[data-page="board"] .board-scroll {
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.settings {
+  padding-top: calc(34px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+}
+.utility-actions { left: max(24px, env(safe-area-inset-left, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+.toast { right: max(24px, env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+.modal-backdrop {
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+}
+.device-grid > div, .remote-diagnostic { min-width: 0; }
+.device-grid code, .remote-diagnostic pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.remote-diagnostic { display: grid; gap: 12px; margin-top: 16px; }
+.remote-diagnostic label { display: grid; gap: 8px; font-size: 12px; }
+.remote-diagnostic textarea { width: 100%; min-height: 120px; resize: vertical; font: 12px/1.5 ui-monospace, monospace; }
+.remote-diagnostic p, .remote-diagnostic pre { margin: 0; }
+@media (max-width: 640px) {
+  .workspace, .settings {
+    padding: calc(20px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(84px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  }
+  .workspace[data-page="board"] { padding: 0; }
+  .workspace[data-page="board"] .toolbar {
+    padding: calc(20px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+    align-items: flex-start; gap: 12px; flex-wrap: wrap;
+  }
+  .toolbar-actions { margin-left: auto; }
+  .utility-actions { left: max(14px, env(safe-area-inset-left, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .toast { right: max(14px, env(safe-area-inset-right, 0px)); bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
+  .remote-diagnostic textarea, .settings input { font-size: 16px; }
+}

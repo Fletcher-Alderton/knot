@@ -57,17 +57,21 @@ impl Default for ModelSettings {
 }
 
 pub fn models_root() -> PathBuf {
-    if let Some(base) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")) {
-        return PathBuf::from(base).join("Knot/models");
+    crate::app_paths::models_root()
+}
+pub fn require_local_ai() -> Result<(), String> {
+    if cfg!(feature = "local-ai") {
+        Ok(())
+    } else {
+        Err(
+            "local AI is disabled; rebuild with the local-ai feature to use local model operations"
+                .into(),
+        )
     }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config/knot/models")
 }
 
 fn settings_path() -> PathBuf {
-    models_root().with_file_name("model-settings.json")
+    crate::app_paths::model_settings_path()
 }
 
 pub fn load_settings() -> ModelSettings {
@@ -126,6 +130,7 @@ pub fn save_settings(settings: &ModelSettings) -> Result<(), String> {
 }
 
 pub fn list_local_models() -> Result<Vec<LocalModel>, String> {
+    require_local_ai()?;
     let root = models_root();
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -158,6 +163,7 @@ pub fn list_local_models() -> Result<Vec<LocalModel>, String> {
 }
 
 pub fn delete_local_model(id: &str) -> Result<bool, String> {
+    require_local_ai()?;
     let root = models_root()
         .canonicalize()
         .unwrap_or_else(|_| models_root());
@@ -180,6 +186,7 @@ pub fn delete_local_model(id: &str) -> Result<bool, String> {
 }
 
 pub fn delete_all_local_models() -> Result<usize, String> {
+    require_local_ai()?;
     let root = models_root();
     if !root.is_dir() {
         return Ok(0);
@@ -277,25 +284,24 @@ pub struct OpenAIModel {
 }
 
 pub fn validate_openai_base_url(raw: &str) -> Result<String, String> {
-    let url = raw.trim().trim_end_matches('/');
-    if url.is_empty() {
+    let raw = raw.trim();
+    if raw.is_empty() {
         return Err("an OpenAI-compatible base URL is required".into());
     }
-    let scheme_end = url
-        .find("://")
-        .filter(|i| matches!(&url[..*i], "http" | "https"))
-        .ok_or("the base URL must start with http:// or https://")?;
-    if url.chars().any(char::is_whitespace) {
-        return Err("the base URL is malformed".into());
+    let url = reqwest::Url::parse(raw).map_err(|_| "the base URL is malformed")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("the base URL must start with http:// or https://".into());
     }
-    let host = url[scheme_end + 3..]
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    if host.is_empty() {
+    if url.host_str().is_none() {
         return Err("the base URL must include a host".into());
     }
-    Ok(url.into())
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("the base URL must not contain credentials".into());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("the base URL must not contain a query or fragment".into());
+    }
+    Ok(url.as_str().trim_end_matches('/').into())
 }
 
 pub fn openai_chat_request(
@@ -453,6 +459,7 @@ pub async fn search_huggingface_models(
     query: &str,
     limit: usize,
 ) -> Result<Vec<HuggingFaceModel>, String> {
+    require_local_ai()?;
     let limit = limit.clamp(1, 50);
     let response = reqwest::Client::new()
         .get("https://huggingface.co/api/models")
@@ -515,6 +522,7 @@ where
     {
         return Err("expected a Hugging Face repo id and a .gguf filename".into());
     }
+    require_local_ai()?;
     let root = models_root();
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let path = root.join(filename);
@@ -633,6 +641,9 @@ mod tests {
         assert!(validate_openai_base_url("ftp://example.com/v1").is_err());
         assert!(validate_openai_base_url("https://").is_err());
         assert!(validate_openai_base_url("https://exa mple.com").is_err());
+        assert!(validate_openai_base_url("https://example.com/v1?tenant=a").is_err());
+        assert!(validate_openai_base_url("https://example.com/v1#models").is_err());
+        assert!(validate_openai_base_url("https://user:pass@example.com/v1").is_err());
     }
     #[test]
     fn openai_chat_request_has_exact_shape() {
@@ -734,5 +745,12 @@ mod tests {
     fn rejects_unsafe_model_ids() {
         assert!(delete_local_model("../install.json").is_err());
         assert!(delete_local_model("model-settings.json").is_err());
+    }
+
+    #[cfg(not(feature = "local-ai"))]
+    #[tokio::test]
+    async fn disabled_local_ai_rejects_hugging_face_search_before_network() {
+        let error = search_huggingface_models("qwen", 1).await.unwrap_err();
+        assert!(error.contains("local AI is disabled"));
     }
 }
