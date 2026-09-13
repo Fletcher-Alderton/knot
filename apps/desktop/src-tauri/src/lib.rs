@@ -1807,14 +1807,28 @@ mod commands {
     #[tauri::command]
     pub fn list_cards(path: String) -> Result<Vec<CardInfo>, String> {
         let s = board(&path)?;
-        s.list_cards()
+        let cards: Vec<CardInfo> = s
+            .list_cards()
             .map_err(|e| e.to_string())?
             .into_iter()
             .map(|id| {
                 let md = s.read_card(&id).map_err(|e| e.to_string())?;
                 card_info(id, &md)
             })
-            .collect()
+            .collect::<Result<_, _>>()?;
+        let root = Path::new(&path)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&path));
+        let mut runtime = runtime().lock().unwrap();
+        for card in &cards {
+            if let Some(revision) = card.revision.as_ref() {
+                runtime
+                    .last_revisions
+                    .entry(revision_key(&root, &card.id))
+                    .or_insert_with(|| revision.clone());
+            }
+        }
+        Ok(cards)
     }
     #[tauri::command]
     pub fn list_archived_cards(path: String) -> Result<Vec<ArchivedCard>, String> {
@@ -2097,31 +2111,6 @@ mod commands {
         let root = PathBuf::from(&path);
         if !root.is_dir() {
             return Err("board folder does not exist".into());
-        }
-        if let Ok(revisions) = load_revisions(&path) {
-            let parents: std::collections::HashSet<String> = revisions
-                .iter()
-                .flat_map(|revision| revision.parents.iter().cloned())
-                .collect();
-            let mut heads: HashMap<String, String> = HashMap::new();
-            for revision in revisions {
-                if !parents.contains(&revision.revision_id) {
-                    heads
-                        .entry(revision.card_id.clone())
-                        .and_modify(|current| {
-                            if revision.revision_id > *current {
-                                *current = revision.revision_id.clone();
-                            }
-                        })
-                        .or_insert(revision.revision_id);
-                }
-            }
-            let mut runtime = runtime().lock().unwrap();
-            for (card_id, revision_id) in heads {
-                runtime
-                    .last_revisions
-                    .insert(revision_key(&root, &card_id), revision_id);
-            }
         }
         let watch_key = root
             .canonicalize()
