@@ -77,6 +77,36 @@ From `apps/desktop`, use these exact commands:
 
 The local-model class is deliberately opt-in because it increases compile time, binary size, and native toolchain requirements. The `quick_add_bench` example requires `local-ai` and is excluded from no-AI and remote-only builds.
 
+## Build and install on macOS
+
+The repository includes a machine-independent installer that builds the current working tree—including uncommitted local changes—replaces the user-installed app safely, and launches it:
+
+```sh
+scripts/install-macos.sh
+```
+
+Defaults:
+
+- AI mode: `both` (`remote-ai,local-ai`).
+- Destination: `~/Applications/Knot.app`.
+- Dependencies: `pnpm install --frozen-lockfile` runs before each build.
+- Bundle: release-mode macOS `.app`; no DMG is generated.
+- Minimum deployment target: macOS 10.15, required by the embedded local-AI runtime.
+
+Select another feature configuration or destination when needed:
+
+```sh
+scripts/install-macos.sh --mode no-ai
+scripts/install-macos.sh --mode remote
+scripts/install-macos.sh --mode local
+scripts/install-macos.sh --mode both --install-dir /Applications
+scripts/install-macos.sh --no-launch
+```
+
+`--install-dir /Applications` may require running from an account with permission to replace apps there. `--skip-deps` is available for repeated local builds after dependencies are already installed. Environment equivalents are `KNOT_AI_MODE`, `KNOT_INSTALL_DIR`, and `KNOT_TARGET_DIR`.
+
+The installer contains no developer account, signing identity, hardware identifier, username, or absolute machine path. It derives the repository path from its own location and always builds local files rather than fetching a branch or release.
+
 ## iOS development
 
 The generated Xcode project is committed at:
