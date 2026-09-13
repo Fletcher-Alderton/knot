@@ -61,8 +61,20 @@ jobs:
         run: pnpm build
 
   desktop-rust:
-    name: Desktop Rust (no default features)
+    name: Desktop Rust (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: no AI
+            features: --no-default-features
+          - name: remote AI
+            features: --no-default-features --features remote-ai
+          - name: local AI
+            features: --no-default-features --features local-ai
+          - name: remote and local AI
+            features: --no-default-features --features remote-ai,local-ai
     steps:
       - uses: actions/checkout@v4
       - name: Install Tauri Linux dependencies
@@ -83,20 +95,10 @@ jobs:
         working-directory: apps/desktop
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Check desktop all targets without local AI
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --no-default-features
-      - name: Test desktop all targets without local AI
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --no-default-features
-
-  local-ai:
-    name: Desktop Rust (local-ai opt-in)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Check native local-ai feature
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features local-ai
+      - name: Check desktop feature configuration
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets ${{ matrix.features }}
+      - name: Test desktop feature configuration
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib ${{ matrix.features }}
 
   ios-rust:
     name: iOS Rust checks

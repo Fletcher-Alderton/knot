@@ -21,6 +21,8 @@ Regeneration can replace project settings. Reapply repository changes represente
 
 ## Simulator
 
+iOS uses the no-AI configuration by default (`default = []`); Quick Add and model-management UI are hidden. Tauri iOS commands below intentionally omit feature flags, so simulator builds do not pull in AI dependencies.
+
 ```sh
 cd apps/desktop
 cargo tauri ios build --debug --target aarch64-sim --ci

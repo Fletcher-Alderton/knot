@@ -183,6 +183,22 @@ fn remove_ascii_case_insensitive(text: &mut String, needle: &str) -> bool {
     true
 }
 
+fn remove_ascii_case_insensitive_token(text: &mut String, needle: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let needle = needle.to_ascii_lowercase();
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let Some(start) = lower.match_indices(&needle).find_map(|(start, _)| {
+        let end = start + needle.len();
+        let before_ok = start == 0 || !is_word(lower.as_bytes()[start - 1]);
+        let after_ok = end == lower.len() || !is_word(lower.as_bytes()[end]);
+        (before_ok && after_ok).then_some(start)
+    }) else {
+        return false;
+    };
+    text.replace_range(start..start + needle.len(), "");
+    true
+}
+
 fn tidy_title(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
@@ -214,7 +230,7 @@ pub fn deterministic_hints(input: &str, columns: &[(String, String)]) -> Determi
         .collect::<Vec<_>>();
     matches.sort_by_key(|(_, marker)| std::cmp::Reverse(marker.len()));
     for (id, marker) in matches {
-        if remove_ascii_case_insensitive(&mut model_input, &marker) {
+        if remove_ascii_case_insensitive_token(&mut model_input, &marker) {
             column = id.clone();
             break;
         }
@@ -455,6 +471,20 @@ mod tests {
         assert_eq!(hints.body, "reproduce first");
         assert_eq!(hints.column, "doing");
         assert_eq!(hints.labels, vec!["bug", "urgent"]);
+    }
+
+    #[test]
+    fn column_markers_require_token_boundaries() {
+        let columns = vec![
+            ("backlog".into(), "Backlog".into()),
+            ("doing".into(), "Doing".into()),
+        ];
+        let embedded = deterministic_hints("Write a login:doing parser", &columns);
+        assert_eq!(embedded.model_input, "Write a login:doing parser");
+        assert_eq!(embedded.column, "backlog");
+        let explicit = deterministic_hints("Write a parser in:doing", &columns);
+        assert_eq!(explicit.model_input, "Write a parser");
+        assert_eq!(explicit.column, "doing");
     }
 
     #[test]

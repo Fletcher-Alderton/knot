@@ -102,53 +102,24 @@ pub struct ParsedCardDraft {
     pub warnings: Vec<String>,
 }
 
-#[cfg(test)]
-fn parse_model_draft(raw: &str) -> Result<ParsedCardDraft, String> {
+fn parse_model_json(raw: &str) -> Result<serde_json::Value, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("model returned an empty response".into());
     }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
-        && let Ok(draft) = serde_json::from_value(value)
-    {
-        return Ok(draft);
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Ok(value);
     }
-    let mut start = None;
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (index, ch) in trimmed.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
+    for (start, ch) in trimmed.char_indices() {
+        if ch != '{' {
             continue;
         }
-        match ch {
-            '"' if start.is_some() => in_string = true,
-            '{' => {
-                if start.is_none() {
-                    start = Some(index);
-                }
-                depth += 1;
-            }
-            '}' if start.is_some() => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    let json = &trimmed[start.expect("set above")..index + ch.len_utf8()];
-                    let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
-                        format!("model returned invalid quick-add JSON: {error}")
-                    })?;
-                    return serde_json::from_value(value).map_err(|error| {
-                        format!("model returned invalid quick-add JSON: {error}")
-                    });
-                }
-            }
-            _ => {}
+        let mut values =
+            serde_json::Deserializer::from_str(&trimmed[start..]).into_iter::<serde_json::Value>();
+        if let Some(Ok(value)) = values.next()
+            && value.is_object()
+        {
+            return Ok(value);
         }
     }
     let preview: String = trimmed.chars().take(160).collect();
@@ -156,6 +127,13 @@ fn parse_model_draft(raw: &str) -> Result<ParsedCardDraft, String> {
         "model did not return a JSON object (response began: {preview})"
     ))
 }
+
+#[cfg(test)]
+fn parse_model_draft(raw: &str) -> Result<ParsedCardDraft, String> {
+    serde_json::from_value(parse_model_json(raw)?)
+        .map_err(|error| format!("model returned invalid quick-add JSON: {error}"))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub path: String,
@@ -713,6 +691,31 @@ fn validate_revision_graph(revisions: &[Revision]) -> Result<(), String> {
     }
     Ok(())
 }
+fn validate_existing_revision(path: &Path, expected: &Revision) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing symlinked revision file: {}",
+            path.display()
+        ));
+    }
+    let existing =
+        serde_json::from_slice::<Revision>(&fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+    validate_revision_record(&existing)?;
+    let same_revision = existing.revision_id == expected.revision_id
+        && existing.card_id == expected.card_id
+        && existing.parents == expected.parents
+        && existing.content_hash == expected.content_hash
+        && existing.snapshot == expected.snapshot
+        && existing.tombstone == expected.tombstone;
+    if same_revision {
+        Ok(())
+    } else {
+        Err(format!("revision ID collision: {}", expected.revision_id))
+    }
+}
+
 fn persist_revision(root: &Path, r: &Revision) -> Result<(), String> {
     validate_revision_record(r)?;
     let d = revisions_dir(root)?;
@@ -730,19 +733,7 @@ fn persist_revision(root: &Path, r: &Revision) -> Result<(), String> {
     }
     let p = d.join(format!("{}.json", r.revision_id));
     match fs::symlink_metadata(&p) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(format!("refusing symlinked revision file: {}", p.display()));
-        }
-        Ok(_) => {
-            let existing =
-                serde_json::from_slice::<Revision>(&fs::read(&p).map_err(|e| e.to_string())?)
-                    .map_err(|e| format!("{}: {e}", p.display()))?;
-            validate_revision_record(&existing)?;
-            if existing != *r {
-                return Err(format!("revision ID collision: {}", r.revision_id));
-            }
-            return Ok(());
-        }
+        Ok(_) => return validate_existing_revision(&p, r),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.to_string()),
     }
@@ -756,14 +747,20 @@ fn persist_revision(root: &Path, r: &Revision) -> Result<(), String> {
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
-    if let Err(error) = fs::rename(&temporary, &p) {
-        let _ = fs::remove_file(&temporary);
-        if fs::symlink_metadata(&p).is_ok() {
-            return Ok(());
+    match fs::hard_link(&temporary, &p) {
+        Ok(()) => {
+            let _ = fs::remove_file(&temporary);
+            Ok(())
         }
-        return Err(error.to_string());
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&temporary);
+            validate_existing_revision(&p, r)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error.to_string())
+        }
     }
-    Ok(())
 }
 fn load_revisions(path: &str) -> Result<Vec<Revision>, String> {
     let directory = revisions_dir(Path::new(path))?;
@@ -1046,6 +1043,7 @@ fn with_mutation(
         ("start", input.start.as_deref()),
     ] {
         if let Some(value) = value
+            && !value.trim().is_empty()
             && (chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() || value.len() != 10)
         {
             return Err(format!("{name} must be a valid YYYY-MM-DD date"));
@@ -1088,11 +1086,15 @@ fn with_mutation(
         );
     }
     if let Some(due) = input.due {
-        fm.due = Some(due);
+        fm.due = (!due.trim().is_empty()).then_some(due);
     }
     if let Some(start) = input.start {
-        fm.extra
-            .insert("start".into(), serde_yaml::Value::String(start));
+        if start.trim().is_empty() {
+            fm.extra.remove("start");
+        } else {
+            fm.extra
+                .insert("start".into(), serde_yaml::Value::String(start));
+        }
     }
     fm.sync = Some(SyncMetadata {
         revision: Some(rid),
@@ -1317,11 +1319,16 @@ mod commands {
     use super::*;
     use tauri::Emitter;
     #[tauri::command]
-    pub fn model_settings() -> model_manager::ModelSettings {
-        model_manager::load_settings()
+    pub fn model_settings() -> Result<model_manager::ModelSettings, String> {
+        model_manager::require_any_ai()?;
+        Ok(model_manager::load_settings())
     }
     #[tauri::command]
     pub fn save_model_settings(settings: model_manager::ModelSettings) -> Result<(), String> {
+        model_manager::require_any_ai()?;
+        if let Some(provider) = settings.provider.as_ref() {
+            model_manager::require_provider(provider)?;
+        }
         model_manager::save_settings(&settings)
     }
     #[tauri::command]
@@ -1333,6 +1340,7 @@ mod commands {
     pub async fn list_ollama_models(
         url: Option<String>,
     ) -> Result<Vec<model_manager::OllamaModel>, String> {
+        model_manager::require_remote_ai()?;
         model_manager::list_ollama_models(url.as_deref().unwrap_or("http://127.0.0.1:11434")).await
     }
     #[tauri::command]
@@ -1340,6 +1348,7 @@ mod commands {
         base_url: Option<String>,
         api_key: Option<String>,
     ) -> Result<Vec<model_manager::OpenAIModel>, String> {
+        model_manager::require_remote_ai()?;
         model_manager::list_openai_models(
             base_url
                 .as_deref()
@@ -1353,6 +1362,7 @@ mod commands {
         base_url: Option<String>,
         api_key: Option<String>,
     ) -> Result<(), String> {
+        model_manager::require_remote_ai()?;
         model_manager::check_openai_access(
             base_url
                 .as_deref()
@@ -1363,17 +1373,14 @@ mod commands {
     }
     #[tauri::command]
     pub async fn parse_quick_add(path: String, text: String) -> Result<ParsedCardDraft, String> {
+        model_manager::require_any_ai()?;
         if text.trim().is_empty() {
             return Err("quick-add input is empty".into());
         }
         let settings = model_manager::load_settings();
-        let provider = settings
-            .provider
-            .ok_or("configure a local NLP model first")?;
+        let provider = settings.provider.ok_or("configure an AI provider first")?;
         let model = settings.model_id.ok_or("choose a model first")?;
-        if matches!(provider, model_manager::ModelProvider::HuggingFace) {
-            model_manager::require_local_ai()?;
-        }
+        model_manager::require_provider(&provider)?;
         let info = inspect(path)?;
         let column_pairs = info
             .columns
@@ -1449,8 +1456,7 @@ mod commands {
                 )?
             }
         };
-        let compact: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|error| format!("model returned invalid Quick Add JSON: {error}"))?;
+        let compact = parse_model_json(&raw)?;
         let mut expanded = quick_add::expand_compact(&compact)?;
         let model_labels = expanded
             .get("labels")
@@ -2336,6 +2342,8 @@ mod commands {
     pub fn app_capabilities() -> AppCapabilities {
         AppCapabilities {
             local_ai: cfg!(feature = "local-ai"),
+            remote_ai: cfg!(feature = "remote-ai"),
+            ai_available: cfg!(any(feature = "local-ai", feature = "remote-ai")),
             mobile: cfg!(mobile),
         }
     }
@@ -2375,6 +2383,8 @@ mod commands {
 #[derive(Debug, Clone, Serialize)]
 pub struct AppCapabilities {
     pub local_ai: bool,
+    pub remote_ai: bool,
+    pub ai_available: bool,
     pub mobile: bool,
 }
 
@@ -2454,6 +2464,20 @@ mod tests {
         let capabilities = app_capabilities();
         assert!(!capabilities.mobile);
         assert_eq!(capabilities.local_ai, cfg!(feature = "local-ai"));
+        assert_eq!(capabilities.remote_ai, cfg!(feature = "remote-ai"));
+        assert_eq!(
+            capabilities.ai_available,
+            cfg!(any(feature = "local-ai", feature = "remote-ai"))
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "remote-ai"))]
+    async fn remote_commands_return_actionable_feature_errors() {
+        let error = list_ollama_models(None).await.unwrap_err();
+        assert!(error.contains("remote-ai feature"));
+        let error = list_openai_models(None, None).await.unwrap_err();
+        assert!(error.contains("remote-ai feature"));
     }
 
     #[test]
@@ -2474,6 +2498,47 @@ mod tests {
                 .unwrap_err()
                 .contains("local AI is disabled")
         );
+    }
+
+    #[cfg(all(feature = "local-ai", not(feature = "remote-ai")))]
+    #[test]
+    fn local_only_rejects_persisting_remote_provider() {
+        let settings = model_manager::ModelSettings {
+            provider: Some(model_manager::ModelProvider::Ollama),
+            ..Default::default()
+        };
+        assert!(
+            save_model_settings(settings)
+                .unwrap_err()
+                .contains("remote-ai feature")
+        );
+    }
+
+    #[cfg(all(feature = "remote-ai", not(feature = "local-ai")))]
+    #[test]
+    fn remote_only_rejects_persisting_local_provider() {
+        let settings = model_manager::ModelSettings {
+            provider: Some(model_manager::ModelProvider::HuggingFace),
+            ..Default::default()
+        };
+        assert!(
+            save_model_settings(settings)
+                .unwrap_err()
+                .contains("local-ai feature")
+        );
+    }
+
+    #[cfg(not(any(feature = "local-ai", feature = "remote-ai")))]
+    #[tokio::test]
+    async fn no_ai_commands_reject_before_reading_settings_or_board() {
+        let settings_error = model_settings().unwrap_err();
+        assert!(settings_error.contains("AI is disabled in this build"));
+        let save_error = save_model_settings(model_manager::ModelSettings::default()).unwrap_err();
+        assert!(save_error.contains("AI is disabled in this build"));
+        let quick_add_error = parse_quick_add("/missing-board".into(), "task".into())
+            .await
+            .unwrap_err();
+        assert!(quick_add_error.contains("AI is disabled in this build"));
     }
 
     #[tokio::test]
@@ -2515,6 +2580,13 @@ mod tests {
         let draft = parse_model_draft(raw).unwrap();
         assert_eq!(draft.title, "Ship it");
         assert_eq!(draft.column, "doing");
+        let compact = parse_model_json(
+            "Ignore {unfinished prose. Result: ```json\n{\"t\":\"Ship it\",\"b\":\"\",\"c\":\"doing\",\"l\":[],\"m\":{},\"d\":null,\"s\":null}\n```",
+        )
+        .unwrap();
+        let expanded = quick_add::expand_compact(&compact).unwrap();
+        assert_eq!(expanded["title"], "Ship it");
+        assert_eq!(expanded["column"], "doing");
         let nulls = parse_model_draft(
             r#"{"title":"Task","body":null,"column":null,"labels":null,"confidence":null,"warnings":null}"#,
         )
@@ -2723,13 +2795,74 @@ body";
                 .and_then(|v| v.as_str()),
             Some("2026-09-10")
         );
+        update_card(
+            p.to_string_lossy().into(),
+            c.id.clone(),
+            CardInput {
+                title: "U".into(),
+                body: "B2".into(),
+                column: "done".into(),
+                labels: vec![],
+                label_colors: Default::default(),
+                position: None,
+                due: Some(String::new()),
+                start: Some(String::new()),
+            },
+        )
+        .unwrap();
+        let raw = fs::read_to_string(
+            p.join("cards")
+                .join(knot_store::card_filename("done", "U", &c.id)),
+        )
+        .unwrap();
+        let parsed = Card::parse(&raw).unwrap();
+        assert_eq!(parsed.frontmatter.due, None);
+        assert!(!parsed.frontmatter.extra.contains_key("start"));
         assert!(delete_card(p.to_string_lossy().into(), c.id).unwrap());
         let revisions = fs::read_dir(p.join(".knot/revisions")).unwrap().count();
-        assert_eq!(revisions, 3);
+        assert_eq!(revisions, 4);
         assert!(pair_peer("".into()).is_err());
         assert!(pair_peer("peer-test".into()).is_err());
         let _ = fs::remove_dir_all(p);
     }
+    #[test]
+    fn concurrent_revision_collision_publishes_only_one_record() {
+        let root = std::env::temp_dir().join(format!("knot-revision-race-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&root).unwrap();
+        let card_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string();
+        let left_body = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Left\ncolumn: backlog\nposition: 1000\n---\n\nleft";
+        let right_body = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Right\ncolumn: backlog\nposition: 1000\n---\n\nright";
+        let left = snapshot("same-id", card_id.clone(), vec![], 1, left_body);
+        let right = snapshot("same-id", card_id, vec![], 2, right_body);
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let handles = [left, right].map(|revision| {
+            let root = root.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                persist_revision(&root, &revision)
+            })
+        });
+        let results = handles.map(|handle| handle.join().unwrap());
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "results: {results:?}"
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("collision")))
+                .count(),
+            1
+        );
+        let revisions = load_revisions(root.to_str().unwrap()).unwrap();
+        assert_eq!(revisions.len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn conflict_resolution_persists_both_parents() {
         let p = std::env::temp_dir().join(format!("knot-conflict-{}", std::process::id()));
@@ -2921,6 +3054,15 @@ body";
                 .contains("title: New")
         );
         assert_eq!(fs::read_dir(p.join(".knot/revisions")).unwrap().count(), 2);
+        let imported_path = p.join(".knot/revisions/a-new.json");
+        let mut imported: Revision =
+            serde_json::from_slice(&fs::read(&imported_path).unwrap()).unwrap();
+        imported.timestamp = imported.timestamp.saturating_sub(1);
+        fs::write(
+            &imported_path,
+            serde_json::to_vec_pretty(&imported).unwrap(),
+        )
+        .unwrap();
         repo.add(knot_sync::Revision {
             id: "b-delete".into(),
             card_id: card_id.into(),

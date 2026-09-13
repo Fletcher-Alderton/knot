@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderCardText } from './testables';
-import { state, capabilities, diagnostics, normalize, applyBoardInfo, loadCards, loadArchivedCards, pairAddress, syncNow, openBoard, openDefaultBoard, dialRemotePeer, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadCapabilities, loadModels, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll, formatDueDate, loadDueDateDisplayPreference, setDueDateDisplayPreference, DUE_DATE_DISPLAY_STORAGE_KEY } from './main';
+import { state, capabilities, diagnostics, normalize, applyBoardInfo, loadCards, loadArchivedCards, pairAddress, syncNow, openBoard, openDefaultBoard, dialRemotePeer, moveCard, renameBoard, renameColumn, createColumn, createLabel, updateLabel, deleteLabel, reorderColumns, setView, render, applyDownloadProgress, setInvokeForTests, setDirectoryPickerForTests, loadCapabilities, loadModels, initializeApp, loadOpenAIModels, checkOpenAIAccess, renderMarkdown, sharePath, shareCardPath, mergeDraftsIntoCards, poll, formatDueDate, loadDueDateDisplayPreference, setDueDateDisplayPreference, DUE_DATE_DISPLAY_STORAGE_KEY } from './main';
 
 const testStorage=new Map<string,string>();
 Object.defineProperty(window,'localStorage',{configurable:true,value:{getItem:(key:string)=>testStorage.get(key)||null,setItem:(key:string,value:string)=>{testStorage.set(key,String(value));},removeItem:(key:string)=>{testStorage.delete(key);},clear:()=>testStorage.clear()}});
-beforeEach(async()=>{testStorage.clear();state.dueDateDisplay='calendar';capabilities.local_ai=true;capabilities.mobile=false;setInvokeForTests(vi.fn(async(command:string)=>command==='app_capabilities'?{local_ai:true,mobile:false}:[] ) as any);await loadCapabilities();});
+beforeEach(async()=>{testStorage.clear();state.dueDateDisplay='calendar';state.modelLoading=false;state.modelFeedback='';capabilities.local_ai=true;capabilities.remote_ai=true;capabilities.mobile=false;setInvokeForTests(vi.fn(async(command:string)=>command==='app_capabilities'?{local_ai:true,remote_ai:true,mobile:false}:[] ) as any);await loadCapabilities();});
 
 describe('Kanban UI',()=>{
  it('formats due dates as stable local-calendar countdowns',()=>{
@@ -425,10 +425,55 @@ it('pairs a serialized endpoint address for the current board',async()=>{
    setInvokeForTests(null);
  });
 
+ it('no-AI mode hides model UI, ignores Quick Add shortcut, and never loads models',async()=>{
+   const invoke=vi.fn(async(command:string)=>command==='app_capabilities'?{local_ai:false,remote_ai:false,mobile:false}:{});
+   setInvokeForTests(invoke as any);await initializeApp();
+   expect(invoke.mock.calls.map(([command])=>command)).not.toContain('model_settings');
+   expect(invoke.mock.calls.map(([command])=>command)).not.toContain('list_local_models');
+   expect(invoke.mock.calls.map(([command])=>command)).not.toContain('list_ollama_models');
+   expect(invoke.mock.calls.map(([command])=>command)).not.toContain('list_openai_models');
+   state.boardPath='/no-ai';state.view='settings';state.modelSettings={};state.localModels=[];state.hfSearchResults=[];state.ollamaModels=[];render();
+   expect(document.querySelector('[data-settings-section=models]')).toBeNull();
+   state.view='board';state.columns=[{id:'backlog',name:'Backlog'},{id:'doing',name:'Doing'},{id:'done',name:'Done'}];state.cards=[];state.quickAddOpen=false;render();
+   expect(document.querySelector('#new-card')).toBeNull();
+   document.dispatchEvent(new KeyboardEvent('keydown',{key:'n',ctrlKey:true,bubbles:true}));expect(state.quickAddOpen).toBe(false);
+   document.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:true,bubbles:true}));expect(state.quickAddOpen).toBe(false);
+   const added:string[]=[];setInvokeForTests(vi.fn(async(command:string,args:any)=>{if(command==='add_card'){added.push(args.input.column);return {id:`new-${args.input.column}`,title:'New card',body:'',column:args.input.column,labels:[]};}throw new Error(command)}) as any);
+   for(const column of ['backlog','doing','done']){document.querySelector<HTMLElement>(`[data-add="${column}"]`)!.click();await vi.waitFor(()=>expect(state.selected).toBe(`new-${column}`));expect(document.querySelector('.editor')).not.toBeNull();state.selected=null;render();}
+   expect(added).toEqual(['backlog','doing','done']);
+ });
+ it('remote-only mode shows remote providers and invokes no local model commands',async()=>{
+   const invoke=vi.fn(async(command:string)=>{if(command==='app_capabilities')return {local_ai:false,remote_ai:true,mobile:false};if(command==='model_settings')return {};if(command==='list_ollama_models')return [{name:'qwen',size_bytes:1}];throw new Error(command)});
+   setInvokeForTests(invoke as any);state.view='settings';await loadCapabilities();await loadModels();render();
+   expect(document.querySelector('[data-model-provider="ollama"]')).not.toBeNull();expect(document.querySelector('[data-model-provider="openai"]')).not.toBeNull();expect(document.querySelector('[data-model-provider="huggingface"]')).toBeNull();
+   expect(invoke).toHaveBeenCalledWith('list_ollama_models',expect.anything());expect(invoke).not.toHaveBeenCalledWith('list_local_models',expect.anything());expect(invoke).not.toHaveBeenCalledWith('load_local_model',expect.anything());
+ });
+ it('local-only mode shows Hugging Face and invokes no remote model commands',async()=>{
+   const invoke=vi.fn(async(command:string)=>{if(command==='app_capabilities')return {local_ai:true,remote_ai:false,mobile:false};if(command==='model_settings')return {};if(command==='list_local_models')return [];throw new Error(command)});
+   setInvokeForTests(invoke as any);state.view='settings';await loadCapabilities();await loadModels();render();
+   expect(document.querySelector('[data-model-provider="huggingface"]')).not.toBeNull();expect(document.querySelector('[data-model-provider="ollama"]')).toBeNull();expect(document.querySelector('[data-model-provider="openai"]')).toBeNull();
+   expect(invoke).toHaveBeenCalledWith('list_local_models',undefined);expect(invoke).not.toHaveBeenCalledWith('list_ollama_models',expect.anything());expect(invoke).not.toHaveBeenCalledWith('list_openai_models',expect.anything());
+ });
+ it('both capabilities show all providers and invoke each provider command',async()=>{
+   const invoke=vi.fn(async(command:string)=>{if(command==='app_capabilities')return {local_ai:true,remote_ai:true,mobile:false};if(command==='model_settings')return {provider:'huggingface',openai_api_key:'sk-test',openai_base_url:'https://api.example.com/v1'};if(command==='list_local_models')return [];if(command==='list_ollama_models')return [];if(command==='list_openai_models')return [{id:'gpt-4o'}];throw new Error(command)});
+   setInvokeForTests(invoke as any);state.view='settings';await loadCapabilities();await loadModels();render();
+   expect(document.querySelectorAll('[data-model-provider]')).toHaveLength(3);expect(invoke).toHaveBeenCalledWith('list_local_models',undefined);
+   document.querySelector<HTMLElement>('[data-model-provider="ollama"]')!.click();await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_ollama_models',expect.anything()));
+   document.querySelector<HTMLElement>('[data-model-provider="openai"]')!.click();document.querySelector<HTMLElement>('#refresh-openai')!.click();await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_openai_models',expect.anything()));
+ });
+ it.each([
+   [{local_ai:true,remote_ai:false},'ollama','huggingface','list_local_models'],
+   [{local_ai:false,remote_ai:true},'huggingface','ollama','list_ollama_models'],
+ ])('transitions unavailable persisted provider without unavailable calls',async(capability,persisted,next,availableCommand)=>{
+   const invoke=vi.fn(async(command:string)=>{if(command==='app_capabilities')return {...capability,mobile:false};if(command==='model_settings')return {provider:persisted};if(command===availableCommand)return [];throw new Error(command)});
+   setInvokeForTests(invoke as any);await loadCapabilities();await loadModels();
+   expect(state.modelSettings.provider).toBe(next);expect(state.modelFeedback).toContain(`${persisted==='ollama'?'Ollama':'On this Mac'} is unavailable`);
+   expect(invoke).not.toHaveBeenCalledWith(persisted==='ollama'?'list_ollama_models':'list_local_models',expect.anything());
+ });
  it('local_ai false skips embedded model commands while remote providers remain available',async()=>{
    capabilities.local_ai=false;state.view='settings';state.modelSettings={provider:'ollama'};
    const invoke=vi.fn(async(command:string)=>{
-    if(command==='app_capabilities')return {local_ai:false,mobile:false};
+    if(command==='app_capabilities')return {local_ai:false,remote_ai:true,mobile:false};
     if(command==='model_settings')return {provider:'ollama',model_id:'qwen',ollama_url:'http://127.0.0.1:11434'};
     if(command==='list_ollama_models')return [{name:'qwen',size_bytes:1}];
     throw new Error(command);
@@ -450,7 +495,7 @@ it('pairs a serialized endpoint address for the current board',async()=>{
  it('diagnostic JSON button invokes dial and displays success and error',async()=>{
    state.view='settings';state.boardPath='/board';const invoke=vi.fn(async(command:string,args:any)=>{if(command==='dial_remote_peer')return {ok:true,address:args.addressJson};throw new Error(command)});setInvokeForTests(invoke as any);render();const input=document.querySelector<HTMLTextAreaElement>('#remote-endpoint')!;input.value='{"id":"peer"}';document.querySelector<HTMLElement>('#dial-remote')!.click();await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('dial_remote_peer',{addressJson:'{"id":"peer"}'}));await vi.waitFor(()=>expect(document.querySelector('.remote-diagnostic .notice')?.textContent).toContain('peer'));setInvokeForTests((async(command:string)=>{if(command==='dial_remote_peer')throw new Error('dial failed');throw new Error(command)}) as any);await dialRemotePeer('{"id":"bad"}');expect(document.querySelector('.error')?.textContent).toContain('dial failed');setInvokeForTests(null);
  });
- it('handles disabled persisted Hugging Face model with actionable controls',()=>{state.view='settings';state.modelSettings={provider:'huggingface',model_id:'missing.gguf'};state.localModels=[];render();expect(document.querySelector<HTMLInputElement>('#keep-model-loaded')?.disabled).toBe(true);expect(document.querySelector('.model-setup-status')?.textContent).toContain('missing.gguf');expect(document.querySelector('[data-install-recommended]')).not.toBeNull();
+ it('handles disabled persisted Hugging Face model with actionable controls',()=>{state.view='settings';state.modelLoading=true;state.modelSettings={provider:'huggingface',model_id:'missing.gguf'};state.localModels=[];render();expect(document.querySelector<HTMLInputElement>('#keep-model-loaded')?.disabled).toBe(true);expect(document.querySelector('.model-setup-status')?.textContent).toContain('missing.gguf');expect(document.querySelector('[data-install-recommended]')).not.toBeNull();
  });
 });
 
@@ -669,14 +714,16 @@ describe('Draft preservation',()=>{
    expect(document.querySelector<HTMLTextAreaElement>('#body')?.value).toBe('Draft in board1');
    setInvokeForTests(null);
  });
- it('preserves explicit date clearing',async()=>{
+ it('persists explicit date clearing',async()=>{
    state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Body',column:'backlog',labels:[],updatedAt:0,due:'2024-01-01',start:'2024-01-02'}];state.selected='card-1';state.drafts={};
+   const invoke=vi.fn(async(command:string)=>{if(command==='update_card')return {id:'card-1',title:'Card',body:'Body',column:'backlog',labels:[],updated_at:'2024-01-03T00:00:00Z'};throw new Error(command)});setInvokeForTests(invoke as any);
    render();
-   const dueInput=document.querySelector<HTMLInputElement>('#due')!;dueInput.value='';
-   dueInput.dispatchEvent(new Event('input',{bubbles:true}));
-   expect(state.drafts['/board']?.['card-1']?.due).toBe('');
-   render();
-   expect(document.querySelector<HTMLInputElement>('#due')?.value).toBe('');
+   const dueInput=document.querySelector<HTMLInputElement>('#due')!;dueInput.value='';dueInput.dispatchEvent(new Event('input',{bubbles:true}));
+   const startInput=document.querySelector<HTMLInputElement>('#start')!;startInput.value='';startInput.dispatchEvent(new Event('input',{bubbles:true}));
+   expect(state.drafts['/board']?.['card-1']?.due).toBe('');expect(state.drafts['/board']?.['card-1']?.start).toBe('');
+   render();document.querySelector<HTMLElement>('#save')!.click();
+   await vi.waitFor(()=>expect(invoke).toHaveBeenCalledWith('update_card',{path:'/board',id:'card-1',input:expect.objectContaining({due:'',start:''})}));
+   setInvokeForTests(null);
  });
  it('preserves newer edits when an older save completes',async()=>{
    state.boardPath='/board';state.view='board';state.cards=[{id:'card-1',title:'Card',body:'Original',column:'backlog',labels:[],updatedAt:0}];state.selected='card-1';state.drafts={};

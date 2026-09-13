@@ -1,3 +1,4 @@
+#[cfg(feature = "local-ai")]
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -5,9 +6,14 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs,
     io::Write,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
+};
+#[cfg(feature = "local-ai")]
+use std::{
+    path::Component,
     time::{Duration, Instant},
 };
+#[cfg(feature = "local-ai")]
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,6 +76,32 @@ pub fn require_local_ai() -> Result<(), String> {
     }
 }
 
+pub fn require_remote_ai() -> Result<(), String> {
+    if cfg!(feature = "remote-ai") {
+        Ok(())
+    } else {
+        Err(
+            "remote AI is disabled; rebuild with the remote-ai feature to use Ollama or OpenAI"
+                .into(),
+        )
+    }
+}
+
+pub fn require_any_ai() -> Result<(), String> {
+    if cfg!(any(feature = "local-ai", feature = "remote-ai")) {
+        Ok(())
+    } else {
+        Err("AI is disabled in this build; enable the local-ai or remote-ai feature".into())
+    }
+}
+
+pub fn require_provider(provider: &ModelProvider) -> Result<(), String> {
+    match provider {
+        ModelProvider::HuggingFace => require_local_ai(),
+        ModelProvider::Ollama | ModelProvider::OpenAI => require_remote_ai(),
+    }
+}
+
 fn settings_path() -> PathBuf {
     crate::app_paths::model_settings_path()
 }
@@ -129,6 +161,12 @@ pub fn save_settings(settings: &ModelSettings) -> Result<(), String> {
     Ok(())
 }
 
+fn is_gguf_model_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+}
+
 pub fn list_local_models() -> Result<Vec<LocalModel>, String> {
     require_local_ai()?;
     let root = models_root();
@@ -138,12 +176,10 @@ pub fn list_local_models() -> Result<Vec<LocalModel>, String> {
     let mut out = Vec::new();
     for entry in fs::read_dir(&root).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
-        if !path.is_file()
-            || path.file_name().and_then(|x| x.to_str()) == Some("model-settings.json")
-        {
+        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if !metadata.file_type().is_file() || !is_gguf_model_file(&path) {
             continue;
         }
-        let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
         let name = path
             .file_name()
             .and_then(|x| x.to_str())
@@ -175,13 +211,17 @@ pub fn delete_local_model(id: &str) -> Result<bool, String> {
         || id.starts_with("..\\")
         || id.contains("/")
         || id.contains("\\")
+        || !is_gguf_model_file(Path::new(id))
     {
         return Err("invalid model id".into());
     }
-    match fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e.to_string()),
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(path)
+            .map(|()| true)
+            .map_err(|error| error.to_string()),
+        Ok(_) => Err("model path is not a regular file".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -194,9 +234,8 @@ pub fn delete_all_local_models() -> Result<usize, String> {
     let mut deleted = 0;
     for entry in fs::read_dir(&root).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
-        if path.is_file()
-            && path.file_name().and_then(|x| x.to_str()) != Some("model-settings.json")
-        {
+        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_file() && is_gguf_model_file(&path) {
             fs::remove_file(path).map_err(|e| e.to_string())?;
             deleted += 1;
         }
@@ -211,6 +250,7 @@ pub struct OllamaModel {
     pub modified_at: Option<String>,
 }
 
+#[cfg(any(feature = "remote-ai", test))]
 pub fn validate_ollama_url(raw: &str) -> Result<String, String> {
     let url = raw.trim().trim_end_matches('/');
     if url != "http://127.0.0.1:11434" && url != "http://localhost:11434" {
@@ -219,6 +259,7 @@ pub fn validate_ollama_url(raw: &str) -> Result<String, String> {
     Ok(url.into())
 }
 
+#[cfg(feature = "remote-ai")]
 pub async fn list_ollama_models(raw_url: &str) -> Result<Vec<OllamaModel>, String> {
     let url = validate_ollama_url(raw_url)?;
     let response = reqwest::Client::new()
@@ -251,6 +292,7 @@ pub async fn list_ollama_models(raw_url: &str) -> Result<Vec<OllamaModel>, Strin
         .collect())
 }
 
+#[cfg(feature = "remote-ai")]
 pub async fn ollama_generate(
     raw_url: &str,
     model: &str,
@@ -283,27 +325,28 @@ pub struct OpenAIModel {
     pub owned_by: Option<String>,
 }
 
+#[cfg(any(feature = "remote-ai", test))]
 pub fn validate_openai_base_url(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("an OpenAI-compatible base URL is required".into());
     }
-    let url = reqwest::Url::parse(raw).map_err(|_| "the base URL is malformed")?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err("the base URL must start with http:// or https://".into());
+    if !(raw.starts_with("http://") || raw.starts_with("https://"))
+        || raw.contains(char::is_whitespace)
+        || raw.contains('?')
+        || raw.contains('#')
+    {
+        return Err("the base URL is malformed".into());
     }
-    if url.host_str().is_none() {
-        return Err("the base URL must include a host".into());
+    let authority = raw.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let host = authority.split('/').next().unwrap_or("");
+    if host.is_empty() || host.contains('@') || host.starts_with(':') {
+        return Err("the base URL must include a host and must not contain credentials".into());
     }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err("the base URL must not contain credentials".into());
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err("the base URL must not contain a query or fragment".into());
-    }
-    Ok(url.as_str().trim_end_matches('/').into())
+    Ok(raw.trim_end_matches('/').into())
 }
 
+#[cfg(any(feature = "remote-ai", test))]
 pub fn openai_chat_request(
     model: &str,
     prompt: &str,
@@ -325,6 +368,7 @@ pub fn openai_chat_request(
     })
 }
 
+#[cfg(any(feature = "remote-ai", test))]
 pub fn openai_extract_text(response: &serde_json::Value) -> Result<String, String> {
     response
         .get("choices")
@@ -337,6 +381,7 @@ pub fn openai_extract_text(response: &serde_json::Value) -> Result<String, Strin
         .ok_or_else(|| "OpenAI API returned no message content".into())
 }
 
+#[cfg(any(feature = "remote-ai", test))]
 pub fn parse_openai_models(response: &serde_json::Value) -> Vec<OpenAIModel> {
     response
         .get("data")
@@ -357,6 +402,7 @@ pub fn parse_openai_models(response: &serde_json::Value) -> Vec<OpenAIModel> {
         .collect()
 }
 
+#[cfg(feature = "remote-ai")]
 pub async fn list_openai_models(
     raw_base_url: &str,
     api_key: Option<&str>,
@@ -378,6 +424,7 @@ pub async fn list_openai_models(
     Ok(parse_openai_models(&response))
 }
 
+#[cfg(any(feature = "remote-ai", test))]
 pub fn openai_access_check_url(raw_base_url: &str) -> Result<String, String> {
     let base_url = validate_openai_base_url(raw_base_url)?;
     let authority = base_url
@@ -402,6 +449,7 @@ pub fn openai_access_check_url(raw_base_url: &str) -> Result<String, String> {
     Ok(format!("{base_url}/{path}"))
 }
 
+#[cfg(feature = "remote-ai")]
 pub async fn check_openai_access(raw_base_url: &str, api_key: Option<&str>) -> Result<(), String> {
     let key = api_key
         .filter(|key| !key.trim().is_empty())
@@ -418,6 +466,7 @@ pub async fn check_openai_access(raw_base_url: &str, api_key: Option<&str>) -> R
     Ok(())
 }
 
+#[cfg(feature = "remote-ai")]
 pub async fn openai_chat_completion(
     raw_base_url: &str,
     api_key: Option<&str>,
@@ -455,6 +504,7 @@ pub struct HuggingFaceModel {
     pub last_modified: Option<String>,
 }
 
+#[cfg(feature = "local-ai")]
 pub async fn search_huggingface_models(
     query: &str,
     limit: usize,
@@ -502,6 +552,7 @@ pub struct DownloadProgress {
     pub bytes_per_second: f64,
 }
 
+#[cfg(feature = "local-ai")]
 pub async fn download_huggingface_gguf<F>(
     repo_id: &str,
     filename: &str,
@@ -580,6 +631,50 @@ where
         path: Some(path.to_string_lossy().into_owned()),
         size_bytes: metadata.len(),
     })
+}
+
+#[cfg(not(feature = "remote-ai"))]
+pub async fn list_ollama_models(_: &str) -> Result<Vec<OllamaModel>, String> {
+    Err("remote AI is disabled; rebuild with the remote-ai feature".into())
+}
+#[cfg(not(feature = "remote-ai"))]
+pub async fn ollama_generate(
+    _: &str,
+    _: &str,
+    _: &str,
+    _: &serde_json::Value,
+    _: bool,
+) -> Result<String, String> {
+    Err("remote AI is disabled; rebuild with the remote-ai feature".into())
+}
+#[cfg(not(feature = "remote-ai"))]
+pub async fn list_openai_models(_: &str, _: Option<&str>) -> Result<Vec<OpenAIModel>, String> {
+    Err("remote AI is disabled; rebuild with the remote-ai feature".into())
+}
+#[cfg(not(feature = "remote-ai"))]
+pub async fn check_openai_access(_: &str, _: Option<&str>) -> Result<(), String> {
+    Err("remote AI is disabled; rebuild with the remote-ai feature".into())
+}
+#[cfg(not(feature = "remote-ai"))]
+pub async fn openai_chat_completion(
+    _: &str,
+    _: Option<&str>,
+    _: &str,
+    _: &str,
+    _: &serde_json::Value,
+) -> Result<String, String> {
+    Err("remote AI is disabled; rebuild with the remote-ai feature".into())
+}
+#[cfg(not(feature = "local-ai"))]
+pub async fn search_huggingface_models(_: &str, _: usize) -> Result<Vec<HuggingFaceModel>, String> {
+    Err("local AI is disabled; rebuild with the local-ai feature".into())
+}
+#[cfg(not(feature = "local-ai"))]
+pub async fn download_huggingface_gguf<F>(_: &str, _: &str, _: F) -> Result<LocalModel, String>
+where
+    F: FnMut(DownloadProgress),
+{
+    Err("local AI is disabled; rebuild with the local-ai feature".into())
 }
 
 #[cfg(test)]
@@ -741,6 +836,35 @@ mod tests {
         assert!(validate_ollama_url("http://localhost:11434").is_ok());
         assert!(validate_ollama_url("https://remote.example").is_err());
     }
+    #[test]
+    fn provider_matrix_matches_compiled_features() {
+        assert_eq!(
+            require_provider(&ModelProvider::HuggingFace).is_ok(),
+            cfg!(feature = "local-ai")
+        );
+        assert_eq!(
+            require_provider(&ModelProvider::Ollama).is_ok(),
+            cfg!(feature = "remote-ai")
+        );
+        assert_eq!(
+            require_provider(&ModelProvider::OpenAI).is_ok(),
+            cfg!(feature = "remote-ai")
+        );
+        assert_eq!(
+            require_any_ai().is_ok(),
+            cfg!(any(feature = "local-ai", feature = "remote-ai"))
+        );
+    }
+
+    #[test]
+    fn only_regular_gguf_files_are_models() {
+        assert!(is_gguf_model_file(Path::new("model.gguf")));
+        assert!(is_gguf_model_file(Path::new("MODEL.GGUF")));
+        assert!(!is_gguf_model_file(Path::new("model.gguf.part")));
+        assert!(!is_gguf_model_file(Path::new("notes.txt")));
+        assert!(!is_gguf_model_file(Path::new("model-settings.json")));
+    }
+
     #[test]
     fn rejects_unsafe_model_ids() {
         assert!(delete_local_model("../install.json").is_err());

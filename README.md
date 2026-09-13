@@ -64,21 +64,18 @@ Run the frontend only:
 pnpm --dir apps/desktop dev
 ```
 
-Run the complete Tauri app with embedded Local AI disabled:
+The desktop AI feature matrix is four-way. `default = []`, so no-AI is the default build. Ollama and OpenAI-compatible APIs are the **remote-provider class**: Knot connects to an Ollama service or an OpenAI-compatible HTTP endpoint and does not run an embedded model. Hugging Face GGUF downloads and embedded inference are the **local-model class** and require `local-ai`. In a no-AI build, Quick Add and the model-management UI are hidden.
 
-```sh
-cd apps/desktop
-cargo tauri dev
-```
+From `apps/desktop`, use these exact commands:
 
-Embedded GGUF inference is deliberately opt-in because it increases compile time, binary size, and native toolchain requirements:
+| Configuration | Development | Build | Check |
+| --- | --- | --- | --- |
+| No AI (default) | `cargo tauri dev` | `cargo tauri build` | `cargo check -p desktop --no-default-features --all-targets` |
+| Remote only | `cargo tauri dev --features remote-ai` | `cargo tauri build --features remote-ai` | `cargo check -p desktop --no-default-features --features remote-ai --all-targets` |
+| Local only | `cargo tauri dev --features local-ai` | `cargo tauri build --features local-ai` | `cargo check -p desktop --no-default-features --features local-ai --all-targets` |
+| Both | `cargo tauri dev --features remote-ai,local-ai` | `cargo tauri build --features remote-ai,local-ai` | `cargo check -p desktop --no-default-features --features remote-ai,local-ai --all-targets` |
 
-```sh
-cd apps/desktop
-cargo tauri dev --features local-ai
-```
-
-Ollama and OpenAI-compatible providers remain available when `local-ai` is disabled. Hugging Face search, download, model management, and embedded inference return an actionable disabled-feature error in that build.
+The local-model class is deliberately opt-in because it increases compile time, binary size, and native toolchain requirements. The `quick_add_bench` example requires `local-ai` and is excluded from no-AI and remote-only builds.
 
 ## iOS development
 
@@ -112,22 +109,18 @@ apps/desktop/src-tauri/gen/apple/build/arm64/Knot.ipa
 
 Generated `build/`, `Externals/`, Xcode user data, and signing state are ignored and must not be committed. See [iOS Development](docs/iOS%20Development.md) for simulator, device, signing, and acceptance procedures.
 
-## Local AI build modes
+## Feature-matrix checks
 
-Default/no-feature checks:
-
-```sh
-cargo check -p desktop --no-default-features --all-targets
-cargo test -p desktop --no-default-features
-```
-
-Opt-in Local AI check:
+CI compiles and runs library tests for all four configurations. Run the same matrix locally:
 
 ```sh
-cargo check -p desktop --features local-ai --all-targets
+cargo test -p desktop --lib --no-default-features
+cargo test -p desktop --lib --no-default-features --features remote-ai
+cargo test -p desktop --lib --no-default-features --features local-ai
+cargo test -p desktop --lib --no-default-features --features remote-ai,local-ai
 ```
 
-The `quick_add_bench` example requires `local-ai` and is excluded from default builds.
+The `quick_add_bench` example requires `local-ai` and is excluded from no-AI and remote-only builds.
 
 ## Checks
 
